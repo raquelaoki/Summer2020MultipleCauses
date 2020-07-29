@@ -9,11 +9,23 @@ my final numpy array. Reading the pickle file is very fast, and the whole data c
 '''
 from pandas_plink import read_plink1_bin
 import os
-
+import numpy as np 
+import pandas as pd 
+import time
+import allel
 
 path_input = "Z:\\POPi3\\Staff\\Raquel Aoki\\Cisplatin-induced_ototoxicity"
 path_output = "Z:\\POPi3\\Staff\\Raquel Aoki\\Summer2020\\"
 path_output_simulated = "C:\\Users\\raque\\Documents\\GitHub\\Summer2020MultipleCauses\\data\\"
+
+
+def read_cadd(path_input): 
+    os.chdir(path_input)
+    cadd = pd.read_csv('Peds_CIO_merged_qc_CADD.txt', sep = " ")
+    cadd['variants'] = cadd['#CHROM'].astype(str)+"_"+cadd['ID']
+    cadd0 = cadd.iloc[:,[6,5]]
+    return cadd0
+    
 
 
 def ld_prune(gn,variants, size, step, threshold=.1, n_iter=1):
@@ -28,82 +40,116 @@ def ld_prune(gn,variants, size, step, threshold=.1, n_iter=1):
     return gn, variants
 
 #Couple of hours
-def data_in_npz(path_input, path_output):
-    os.chdir(path_input)
-    G = read_plink1_bin("Peds_CIO_merged_qc_data.bed", bim = None, fam = None, verbose=False)
-    #data_GT =  G.compute().values #samples x snps #memory problem
-    #read parts of bed values https://github.com/limix/pandas-plink/blob/master/doc/usage.rst
-    samples =  G.sample.values  # samples
-    variants = G.variant.values
+#def data_in_npz(path_input, path_output):
 
-    print('Shape: ',len(samples),len(variants)) #Shape:  454 6726287
-
-    #print(G.a0.sel(variant=str(i)).values,G.a1.sel(variant=str(i)).values)
-    #print(G.sel(sample=samples[0], variant=variants[0]).values)
-    #https://stackoverflow.com/questions/16476924/how-to-iterate-over-rows-in-a-dataframe-in-pandas
-
-    #saving samples
-    np.save(path_output + 'samples',samples)
-
-    #preparing variables
-    variants_done = []
-    start0 = start = time.time()
-    interval = 100000 #1000
-    ind = 0
-    build = True
-
-    for var in range(len(variants)//interval):
-        row = G.sel(sample=samples, variant=variants[ind:ind+interval]).values.transpose()
-        row_,variants_  = ld_prune(row,variants[ind:ind+interval], 600 , 200, 0.1, 3)
-
-        variants_done.append(variants_)
-        ind = ind + interval
+os.chdir(path_input)
+   
+G = read_plink1_bin("Peds_CIO_merged_qc_data.bed", bim = None, fam = None, verbose=False)
+#data_GT =  G.compute().values #samples x snps #memory problem
+#read parts of bed values https://github.com/limix/pandas-plink/blob/master/doc/usage.rst
+samples =  G.sample.values  # samples
+variants = G.variant.values
 
 
-        if build:
-            data = np.matrix(row_)
-            build = False
-        else:
-            data = np.concatenate((data,np.matrix(row_)), axis = 0)
+s, v = len(samples), len(variants)
+print('Original shape: ',len(samples),len(variants)) #Shape:  454 6726287
 
-        if var%10 == 0:
-            print('Progress: ',round(var*100/(len(variants)//interval),4),'% ---- Time Dif (s): ', round(time.time()-start,2))
-            np.savez(path_output+'gt.npz', name1=data)
-            start = time.time()
+#removind variants with cadd value < 1
+if os.path.isfile(path_output+'variants_cadd_g1.npy'):
+    variants1 = np.load(path_output+'variants_cadd_g1.npy')
+else: 
+    remove_variants = []
+    cadd = read_cadd(path_input)
+    for v in range(cadd.shape[0]):
+        if cadd.CADD_PHRED[v]<=1: 
+            remove_variants.append(cadd.variants[v])
+            
+    variants = variants.tolist()
+    variants1 = []
+    for v in variants:
+        if v not in remove_variants:
+            variants1.append(rv)
+    np.save(path_output + 'variants_cadd_g1',variants1)
 
 
-    row = G.sel(sample=samples, variant=variants[ind:len(variants)]).values.transpose()
-    row_,variants_  = ld_prune(row,variants[ind:ind+interval], 600 , 200, 0.1, 3)
+print('Variants reduced ', round(100*len(variants)/v))
 
+
+#print(G.a0.sel(variant=str(i)).values,G.a1.sel(variant=str(i)).values)
+#print(G.sel(sample=samples[0], variant=variants[0]).values)
+#https://stackoverflow.com/questions/16476924/how-to-iterate-over-rows-in-a-dataframe-in-pandas
+
+#saving samples
+np.save(path_output + 'samples',samples)
+
+#preparing variables
+variants_done = []
+start0 = start = time.time()
+interval = 100000 #1000
+ind = 0
+build = True
+
+#calculate the frequency for all (number of 0, 1, 2). Try to calculate for for all, 
+#if too hard/large, try to final list 
+
+#remove low CADD (less then 1) for example 
+
+for var in range(len(variants)//interval):
+    row = G.sel(sample=samples, variant=variants[ind:ind+interval]).values.transpose()
+    row_,variants_  = ld_prune(row,variants[ind:ind+interval], 600 , 200, 0.05, 3)
+    #compare the true values among them and pick the one with largest CADD
+    
     variants_done.append(variants_)
-    data = np.concatenate((data,np.matrix(row_)), axis = 0)
-    np.savez(path_output+'gt.npz', name1=data)
-    np.save(path_output + 'variants',variants_)
-    print('Total time in minutes: ', round((time.time()-start0)/60, 2))
+    ind = ind + interval
+
+
+    if build:
+        data = np.matrix(row_)
+        build = False
+    else:
+        data = np.concatenate((data,np.matrix(row_)), axis = 0)
+
+    if var%10 == 0:
+        print('Progress: ',round(var*100/(len(variants)//interval),4),'% ---- Time Dif (s): ', round(time.time()-start,2))
+        np.savez(path_output+'gt.npz', name1=data)
+        start = time.time()
+
+
+row = G.sel(sample=samples, variant=variants[ind:len(variants)]).values.transpose()
+row_,variants_  = ld_prune(row,variants[ind:ind+interval], 600 , 200, 0.1, 3)
+
+variants_done.append(variants_)
+data = np.concatenate((data,np.matrix(row_)), axis = 0)
+np.savez(path_output+'gt.npz', name1=data)
+np.save(path_output + 'variants',variants_)
+print('Total time in minutes: ', round((time.time()-start0)/60, 2))
 
 
 
-    #last prune variants = variants.compress(loc_unlinked)
-    #IndexError: index 997 is out of bounds for axis 0 with size 997
-    data, variants_ = ld_prune(data,variants_,600 , 200, 0.1, 5)
-    np.savez(path_output+'gt.npz', name1=data)
-    np.save(path_output + 'variants',variants_)
+#last prune variants = variants.compress(loc_unlinked)
+#IndexError: index 997 is out of bounds for axis 0 with size 997
+data, variants_ = ld_prune(data,variants_,600 , 200, 0.1, 5)
+np.savez(path_output+'gt.npz', name1=data)
+np.save(path_output + 'variants',variants_)
 
 
-    #add back known SNPs
+#add back known SNPs
 
+#use both encodings
+#dominant coding (0-> 1 and 1, 2 -> 0) to have recessive coding (0,1-> 1 and 2 -> 0) 
 
+#SNPS 01
+data = np.where(data,0,1).transpose()
+sumcol = data.sum(axis = 0)
+data = data.compress(sumcol!=0, axis=0)
+variants_ = variants_.compress(sumcol!=0)
 
-    #SNPS 01
-    data = np.where(data,0,1).transpose()
-    sumcol = data.sum(axis = 0)
-    data = data.compress(sumcol!=0, axis=0)
-    variants_ = variants_.compress(sumcol!=0)
+sparse.save_npz(path_output+'gt01.npz', data.transpose())
+np.save(path_output + 'variants01',variants_)
 
-    sparse.save_npz(path_output+'gt01.npz', data.transpose())
-    np.save(path_output + 'variants01',variants_)
+#return data, variants_
+#end function
 
-    return data, variants_
 
 
 load = False
