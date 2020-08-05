@@ -21,12 +21,12 @@ path_input = "Z:\\POPi3\\Staff\\Raquel Aoki\\Cisplatin-induced_ototoxicity"
 path_output = "Z:\\POPi3\\Staff\\Raquel Aoki\\Summer2020\\"
 path_output_simulated = "C:\\Users\\raque\\Documents\\GitHub\\Summer2020MultipleCauses\\data\\"
 
-known_snps_path = "C:\\Users\\raque\\Documents\\GitHub\\Summer2020MultipleCauses\\data\\known_snps.txt"
-ks = pd.read_csv(known_snps_path, header = None)
+#ks = pd.read_csv(path_input+'\\SNPS_known.txt', header = None)[0].values
+known_snps_path = 'C:\\Users\\raque\\Documents\\GitHub\\Summer2020MultipleCauses\\data\\known_snps.txt'
+ks = pd.read_csv(known_snps_path, header = None)[0].values
 
 def functools_reduce_iconcat(a):
     return functools.reduce(operator.iconcat, a, [])
-
 
 def read_cadd(path_input, ks): 
     print('LOADING CADD')
@@ -38,14 +38,12 @@ def read_cadd(path_input, ks):
     print('CHECKING FOR KNOWN SNPS')
     ks_fullname = []
     missing = []
-    for i in range(len(ks[0])):
-        ksf = cadd.variants[cadd.ID==ks[0][i]]
+    for i in range(len(ks)):
+        ksf = cadd.variants[cadd.ID==ks[i]]
         if len(ksf)==0: 
-            missing.append(ks[0][i])
+            missing.append(ks[i])              
         else: 
-            ks_fullname.append(ksf.values[0])
-    
-       
+            ks_fullname.append(ksf.values[0])   
     
     return cadd0, ks_fullname, missing
 
@@ -63,7 +61,10 @@ def ld_prune(gn,variants,cadd,thold):
     #Estimate the linkage disequilibrium parameter r for each pair of variants 
     r = allel.rogers_huff_r(gn)
     correlations = squareform(r ** 2)
-    
+    correlations = pd.DataFrame(correlations)
+    correlations.fillna(1,inplace = True)
+    correlations = correlations.values
+    del r 
     #Saving the indiced of explored snps 
     keep = []
     done = []
@@ -78,8 +79,8 @@ def ld_prune(gn,variants,cadd,thold):
             #Filtering the columns with high correlation
             filter_1 = np.greater(correlations[:,v_], thold)
             filter_1 = filter_1*np.equal(filter_0,1)
-    
-    
+        
+        
             if filter_1.sum()>1:
                 v_ind = np.arange(len(variants))[filter_1]  
                 v_ind = np.append(v_ind, v_) 
@@ -100,9 +101,10 @@ def ld_prune(gn,variants,cadd,thold):
             else: 
                 keep.append(v_)
                 done.append(v_)
-        
+
     
     #Filtering final results on the subset to output
+    #ADD FUNCTION TO KEEP KNOWN ELEMENTS HERE
     
     #keep = [item for sublist in keep for item in sublist]    
     loc_unlinked = np.zeros(len(variants))
@@ -162,32 +164,54 @@ cadd_sort.fillna(value = {'CADD_PHRED':0}, inplace = True)
 for var in range(10):
 
     row = G.sel(sample=samples, variant=variants[ind:ind+interval]).values.transpose()
+    #Counting Frequencies
+    
+    row = pd.DataFrame(row)
+    row.fillna(-1, inplace=True)
+    #counts = row.copy() 
+    #counts_ = counts.apply(pd.Series.value_counts , axis = 1)
+    #del counts 
+    
+    row = row.values
     row_,variants_ , cadd_ = ld_prune(row, variants[ind:ind+interval], cadd_sort.CADD_PHRED[ind:ind+interval].values, thold) #600 , 200, 0.05, 3
-     
+    del row  
+    
     variants_done.append(variants_)
     cadd_done.append(cadd_)
     ind = ind + interval
 
     if build:
         data = np.matrix(row_)
+        #counts012 = counts_.values
         build = False
     else:
         data = np.concatenate((data,np.matrix(row_)), axis = 0)
+        #counts012 = np.concatenate((counts012, counts_.values), axis = 0) 
 
     if var%10 == 0:
         print('Progress: ',round(var*100/(len(variants)//interval),4),'% ---- Time Dif (s): ', round(time.time()-start,2))
         np.savez(path_output+'gt.npz', name1=data)
         np.save(path_output + 'variants',variants_done)
         np.save(path_output + 'cadd',cadd_done)
+        #np.save(path_output + 'counts012',counts012)
         start = time.time()
 
 
 row = G.sel(sample=samples, variant=variants[ind:len(variants)]).values.transpose()
+row = pd.DataFrame(row)
+row.fillna(-1, inplace=True)
+counts = row.copy() 
+counts_ = counts.apply(pd.Series.value_counts , axis = 1)
+del counts 
+
+row = row.values
+    
 row_,variants_ , cadd_ = ld_prune(row, variants[ind:ind+interval], cadd_sort.CADD_PHRED[ind:ind+interval].values, thold) #600 , 200, 0.05, 3
 variants_done.append(variants_)
 cadd_done.append(cadd_)
 
 data = np.concatenate((data,np.matrix(row_)), axis = 0)
+counts012 = np.concatenate((counts012, counts_.values), axis = 0) 
 variants_done = [item for sublist in variants_done for item in sublist]    
 cadd_done = [item for sublist in cadd_done for item in sublist]    
 
@@ -197,19 +221,25 @@ data_,variants_ , cadd_ = ld_prune(data,  np.asarray(variants_done),  np.asarray
 np.savez(path_output+'gt.npz', name1=data_)
 np.save(path_output + 'variants',variants_)
 np.save(path_output + 'cadd',cadd_)
+#np.save(path_output + 'counts012',counts012)
 
 print('Total time in minutes: ', round((time.time()-start0)/60, 2))
 
 '''Adding back SNPS'''
 for ks in ks_fullname: 
     if ks not in variants_: 
-        #Recover position in G.sel 
-        #add back on data
-        #add on varians 
-        #add on cadd
+        #print(ks)
+        row_ = G.sel(sample=samples, variant=ks).values.transpose()
+        data = np.concatenate((data,np.matrix(row_)), axis = 0)
+        
+        variants_done.append(ks)
+        cadd_done.append(cadd_sort.CADD_PHRED[cadd_sort.variants==ks].values[0])
+
+np.savez(path_output+'gt.npz', name1=data_)
+np.save(path_output + 'variants',variants_)
+np.save(path_output + 'cadd',cadd_)
 
 
-#add back known SNPs
 #use both encodings
 #dominant coding (0-> 1 and 1, 2 -> 0) to have recessive coding (0,1-> 1 and 2 -> 0) 
 
@@ -221,45 +251,3 @@ sparse.save_npz(path_output+'gt_dominant.npz',data_d)
 data_s = np.where(data_,2,1).transpose()
 sparse.save_npz(path_output+'gt_recessive.npz',data_d)
 
-
-#return data, variants_
-#end function
-
-load = False
-if load:
-    bd = np.load(path_output+'gt.npz')
-    bd = bd['name1']
-
-else:
-    bd, variants = data_in_npz(path_input, path_output)
-
-
-
-
-
-#sparse.save_npz(path_output+'genotype_sparse.npz', data)
-#sparse_matrix = scipy.sparse.load_npz('/tmp/sparse_matrix.npz')
-
-
-#sparse_matrix =
-#bd.load
-#bd.todense()
-
-
-testing = TRUE
-if testing:
-    from os.path import join
-    from pandas_plink import get_data_folder
-        G = read_plink1_bin(join(get_data_folder(), "chr*.bed"), verbose=False)
-        print(G)
-        #(bim, fam, bed) = read_plink(join(get_data_folder(), "data"), verbose=False)
-        #print(bed.compute())
-        #SNPS genotype dataset
-        data_GT =  G.compute().values #samples x snps
-        samples =  G.sample.values  # samples
-        snps = G.snp.values #snps
-        #Identify some causal snps (known)
-else:
-    #datapath = "Z:\\POPi3\\Staff\\Raquel Aoki\\Cisplatin-induced_ototoxicity"
-    #os.chdir(datapath)
-    G = read_plink1_bin("Peds_CIO_merged_qc_data.bed", "Peds_CIO_merged_qc_data.bim", "Peds_CIO_merged_qc_data.fam", verbose=False)
