@@ -16,6 +16,8 @@ import allel
 from scipy.spatial.distance import squareform
 import operator
 import functools 
+from scipy.sparse import coo_matrix, vstack
+from scipy import sparse
 
 path_input = "Z:\\POPi3\\Staff\\Raquel Aoki\\Cisplatin-induced_ototoxicity"
 path_output = "Z:\\POPi3\\Staff\\Raquel Aoki\\Summer2020\\"
@@ -89,11 +91,13 @@ def ld_prune(gn,variants,cadd,thold):
                 v_cadd = np.append(v_cadd, cadd[v_])
                        
                 #keeping only the snp with highest cadd
+                #if all less than 1, keep none
                 filter_2 = np.equal(v_cadd,v_cadd.max())
-                if isinstance(v_ind[filter_2], np.ndarray): 
-                    keep.append(v_ind[filter_2][0])
-                else: 
-                    keep.append(v_ind[filter_2])
+                if v_cadd.max()>1: 
+                    if isinstance(v_ind[filter_2], np.ndarray): 
+                        keep.append(v_ind[filter_2][0])
+                    else: 
+                        keep.append(v_ind[filter_2])
                   
                 
                 for item in v_ind: 
@@ -110,9 +114,9 @@ def ld_prune(gn,variants,cadd,thold):
     loc_unlinked = np.zeros(len(variants))
     loc_unlinked[keep] = 1
     
-    n = np.count_nonzero(loc_unlinked)
-    n_remove = gn.shape[0] - n
-    print('retaining', n, 'removing', n_remove, 'variants')
+    #n = np.count_nonzero(loc_unlinked)
+    #n_remove = gn.shape[0] - n
+    #print('retaining', n, 'removing', n_remove, 'variants')
     gn = gn.compress(loc_unlinked, axis=0)
     variants = variants[keep]
     cadd = cadd[keep]
@@ -138,14 +142,7 @@ cadd, ks_fullname, missing = read_cadd(path_input,ks)
 '''Saving samples output'''
 np.save(path_output + 'samples',samples)
 
-'''preparing variables'''
-variants_done = []
-cadd_done = []
-start0 = start = time.time()
-interval = 10000
-ind = 0
-thold = 0.05
-build = True
+
 
 '''Making sure the Cadd and variants are in the same order (very important)'''
 cadd['variants_cat'] = pd.Categorical(cadd['variants'], categories=variants,   ordered=True)
@@ -159,13 +156,75 @@ else:
 
 cadd_sort.fillna(value = {'CADD_PHRED':0}, inplace = True)
 
-'''Filtering full dataset'''
-#for var in range(len(variants)//interval):
-for var in range(10):
 
-    row = G.sel(sample=samples, variant=variants[ind:ind+interval]).values.transpose()
-    #Counting Frequencies
+def filteringSNPS(variants, cadd_sort, samples, G, 
+                  path_input, path_output, tag, 
+                  thold = 0.05, interval = 10000): 
+    '''preparing variables'''
+    variants_done = []
+    cadd_done = []
+    start0 = start = time.time()
+    #interval = 10000
+    ind = 0
+    #thold = 0.05
+    build = True
+
+    '''Filtering full dataset'''
+    print(range(len(variants)//interval))
+    for var in range(len(variants)//interval):
+    #use sparse format to reduce size
+    #https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.vstack.html
+    #for var in range(11):
     
+        row = G.sel(sample=samples, variant=variants[ind:ind+interval]).values.transpose()
+        #Counting Frequencies
+        
+        row = pd.DataFrame(row)
+        row.fillna(-1, inplace=True)
+        #counts = row.copy() 
+        #counts_ = counts.apply(pd.Series.value_counts , axis = 1)
+        #del counts 
+        
+        row = row.values
+        row_,variants_ , cadd_ = ld_prune(row, variants[ind:ind+interval], cadd_sort[ind:ind+interval], thold) #600 , 200, 0.05, 3
+        del row  
+        
+        variants_done.append(variants_)
+        cadd_done.append(cadd_)
+        ind = ind + interval
+        row_d = np.where(row_,0,1) #Dominant: 0 are 1; 1 and 2 are 0 
+        row_s = np.where(row_,2,1) #Recessive: 2 are 1, 1 and 0 are 0 #WRONG
+        #Correct filter for Resessive:np.where(test > 1, 1, 0)
+    
+        if build:
+            #dominant coding: 
+            data_d = coo_matrix(row_d)
+            
+            #recessive coding:
+            data_s = coo_matrix(row_s)
+            ##  data = np.matrix(row_)
+            #counts012 = counts_.values
+            build = False
+            del row_d, row_s, row_ 
+        else:
+            data_d = vstack([data_d,coo_matrix(row_d)])
+            data_s = vstack([data_s,coo_matrix(row_s)])
+            #data = np.concatenate((data,np.matrix(row_)), axis = 0)
+            #data = vstack([data,coo_matrix(row_)])#.toarray()
+            #counts012 = np.concatenate((counts012, counts_.values), axis = 0) 
+    
+        if var%10 == 0:
+            print('Progress: ',round(var*100/(len(variants)//interval),4),'% ---- Time Dif (s): ', round(time.time()-start,2))
+            #np.savez(path_output+'gt.npz', name1=data)
+            sparse.save_npz(path_output+tag+'gt_dominant.npz',data_d)
+            sparse.save_npz(path_output+tag+'gt_recessive.npz',data_s)
+            np.save(path_output+tag + 'variants',variants_done)
+            np.save(path_output+tag + 'cadd',cadd_done)
+            #np.save(path_output + 'counts012',counts012)
+            start = time.time()
+    
+    
+    row = G.sel(sample=samples, variant=variants[ind:len(variants)]).values.transpose()
     row = pd.DataFrame(row)
     row.fillna(-1, inplace=True)
     #counts = row.copy() 
@@ -173,81 +232,86 @@ for var in range(10):
     #del counts 
     
     row = row.values
-    row_,variants_ , cadd_ = ld_prune(row, variants[ind:ind+interval], cadd_sort.CADD_PHRED[ind:ind+interval].values, thold) #600 , 200, 0.05, 3
-    del row  
-    
+    row_,variants_ , cadd_ = ld_prune(row, variants[ind:ind+interval], cadd_sort[ind:ind+interval], thold) #600 , 200, 0.05, 3
     variants_done.append(variants_)
     cadd_done.append(cadd_)
-    ind = ind + interval
-
-    if build:
-        data = np.matrix(row_)
-        #counts012 = counts_.values
-        build = False
-    else:
-        data = np.concatenate((data,np.matrix(row_)), axis = 0)
-        #counts012 = np.concatenate((counts012, counts_.values), axis = 0) 
-
-    if var%10 == 0:
-        print('Progress: ',round(var*100/(len(variants)//interval),4),'% ---- Time Dif (s): ', round(time.time()-start,2))
-        np.savez(path_output+'gt.npz', name1=data)
-        np.save(path_output + 'variants',variants_done)
-        np.save(path_output + 'cadd',cadd_done)
-        #np.save(path_output + 'counts012',counts012)
-        start = time.time()
-
-
-row = G.sel(sample=samples, variant=variants[ind:len(variants)]).values.transpose()
-row = pd.DataFrame(row)
-row.fillna(-1, inplace=True)
-counts = row.copy() 
-counts_ = counts.apply(pd.Series.value_counts , axis = 1)
-del counts 
-
-row = row.values
     
-row_,variants_ , cadd_ = ld_prune(row, variants[ind:ind+interval], cadd_sort.CADD_PHRED[ind:ind+interval].values, thold) #600 , 200, 0.05, 3
-variants_done.append(variants_)
-cadd_done.append(cadd_)
+    row_d = np.where(row_,0,1)
+    row_s = np.where(row_,2,1)   
+    del row_
+    
+    #data = np.concatenate((data,np.matrix(row_)), axis = 0)
+    #counts012 = np.concatenate((counts012, counts_.values), axis = 0) 
+    data_d = vstack([data_d,coo_matrix(row_d)])
+    data_s = vstack([data_s,coo_matrix(row_s)])
+            
+    variants_done = [item for sublist in variants_done for item in sublist]    
+    cadd_done = [item for sublist in cadd_done for item in sublist]    
+    
+    sparse.save_npz(path_output+tag+'gt_dominant.npz',data_d)
+    sparse.save_npz(path_output+tag+'gt_recessive.npz',data_s)
+    np.save(path_output+tag + 'variants',variants_done)
+    np.save(path_output+tag + 'cadd',cadd_done)
+    #np.save(path_output + 'counts012',counts012)
 
-data = np.concatenate((data,np.matrix(row_)), axis = 0)
-counts012 = np.concatenate((counts012, counts_.values), axis = 0) 
-variants_done = [item for sublist in variants_done for item in sublist]    
-cadd_done = [item for sublist in cadd_done for item in sublist]    
+    print('Total time in minutes: ', round((time.time()-start0)/60, 2))
+    return data_d, data_s, variants_done, cadd_done
 
-#last prune variants = variants.compress(loc_unlinked)
-#IndexError: index 997 is out of bounds for axis 0 with size 997
-data_,variants_ , cadd_ = ld_prune(data,  np.asarray(variants_done),  np.asarray(cadd_done), thold) #600 , 200, 0.05, 3
-np.savez(path_output+'gt.npz', name1=data_)
-np.save(path_output + 'variants',variants_)
-np.save(path_output + 'cadd',cadd_)
-#np.save(path_output + 'counts012',counts012)
 
-print('Total time in minutes: ', round((time.time()-start0)/60, 2))
+
+'''First PRUNE: IF 0 IN ONE AND 1 ON ANOTHER: 2, IF 1 AND 0: 0, IF 0 AND 0: 1'''
+#Takes 48 hours to finish 
+data_d, data_s, variants_, cadd_ = filteringSNPS(variants, cadd_sort.CADD_PHRED.values, samples, G, path_input, path_output, 'first')
+
+
+'''FINAL PRUNE: IF 0 IN ONE AND 1 ON ANOTHER: 2, IF 1 AND 0: 0, IF 0 AND 0: 1'''
+data_df, data_sf, variants_f, cadd_f = filteringSNPS(np.array(variants_), np.array(cadd_), samples, G, path_input, path_output, 'final', 0.2, 10000)
+
+
+'''Fixing Errors'''
+tag = 'snpsback_'
+data_df = sparse.load_npz(path_output+tag+'gt_dominant.npz')
+data_sf = sparse.load_npz(path_output+tag+'gt_recessive.npz')
+variants_f = np.load(path_output+tag + 'variants.npy')
+cadd_f = np.load(path_output+tag+'cadd.npy')
+
+missing = variants_f[data_df.shape[0]:len(variants_f)]
+row_ = G.sel(sample = samples, variant = missing).values.transpose()
+row_d = np.where(row_,0,1)
+data_df = vstack([data_df,coo_matrix(row_d)])
+        
+row_ = G.sel(sample = samples, variant = variants_f).values.tranpose()
+row_d = np.equal(row_,0)
+row_d = row_d*1
+
+row_r = np.equal(row_,2)
+row_r = row_r*1
+
+data_df = coo_matrix(row_d)
+data_sf = coo_matrix(row_r)
+sparse.save_npz(path_output+tag+'gt_dominant.npz',data_df)
+sparse.save_npz(path_output+tag+'gt_recessive.npz',data_sf)
 
 '''Adding back SNPS'''
+
 for ks in ks_fullname: 
-    if ks not in variants_: 
+    if ks not in variants_f: 
         #print(ks)
         row_ = G.sel(sample=samples, variant=ks).values.transpose()
-        data = np.concatenate((data,np.matrix(row_)), axis = 0)
+        row_d = np.where(row_,0,1)
+        row_s = np.where(row_,2,1)   
         
-        variants_done.append(ks)
-        cadd_done.append(cadd_sort.CADD_PHRED[cadd_sort.variants==ks].values[0])
+        data_df = vstack([data_df,coo_matrix(row_d)])
+        data_sf = vstack([data_sf,coo_matrix(row_s)])
+    
+        #data = np.concatenate((data,np.matrix(row_)), axis = 0)
+        
+        variants_f.append(ks)
+        cadd_f.append(cadd_sort.CADD_PHRED[cadd_sort.variants==ks].values[0])
 
-np.savez(path_output+'gt.npz', name1=data_)
-np.save(path_output + 'variants',variants_)
-np.save(path_output + 'cadd',cadd_)
-
-
-#use both encodings
-#dominant coding (0-> 1 and 1, 2 -> 0) to have recessive coding (0,1-> 1 and 2 -> 0) 
-
-#dominant coding: 
-data_d = np.where(data_,0,1).transpose()
-sparse.save_npz(path_output+'gt_dominant.npz',data_d)
-
-#recessive coding: 
-data_s = np.where(data_,2,1).transpose()
-sparse.save_npz(path_output+'gt_recessive.npz',data_d)
+tag = 'snpsback2_'
+sparse.save_npz(path_output+tag+'gt_dominant.npz',data_df)
+sparse.save_npz(path_output+tag+'gt_recessive.npz',data_sf)
+np.save(path_output+tag + 'variants',variants_f)
+np.save(path_output+tag + 'cadd',cadd_f)
 
