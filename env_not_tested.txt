@@ -1,0 +1,31 @@
+#Nothing works, tensorflow estimator is probably broken. Needs to reinstall anaconda
+#parkca env still works, use it for now
+
+
+## Env
+* conda create --name summer2020 python=3.7
+* conda activate summer2020
+* conda remove --name summer2020 --all
+
+### Packages:
+* conda install -c conda-forge tensorflow=1.15 (does not work)(trying again)
+* pip install --ignore-installed --upgrade tensorflow==2.2.0 (does not work)
+* conda install -c conda-forge tensorflow-probability 
+* conda install -c conda-forge pandas-plink
+* conda install -c anaconda scikit-learn
+* conda install -c anaconda seaborn
+* conda install -c anaconda statsmodels
+* conda install pytorch torchvision cudatoolkit=10.2 -c pytorch
+* pip install pywsl
+* conda install -c anaconda hdf5=1.8.17
+
+
+Optional:
+* pip install -e "git+https://github.com/google/edward2.git#egg=edward2"
+
+
+tensorflow 2.2.0 requires gast==0.3.3, but you'll have gast 0.4.0 which is incompatible.
+tensorflow 2.2.0 requires scipy==1.4.1; python_version >= "3", but you'll have scipy 1.5.0 which is incompatible.
+
+conda install -c anaconda scipy==1.4.1
+conda install -c anaconda gast==0.3.3
