@@ -38,7 +38,7 @@ def roc_table_creation(filenames,modelname):
         roc_table = roc_table.append(roc,ignore_index=True)
     roc_table.to_pickle('results//roc_'+modelname+'.txt')
 
-def roc_plot(filename):
+def roc_plot(roc_table1):
     '''
     From filenama with roc table with tp,tn, acc and others, fit the plot
     '''
@@ -46,7 +46,8 @@ def roc_plot(filename):
     #roc_table1 = pd.read_csv(filename,delimiter=';')
     #coef_table1 = pd.read_csv('results\\coef_15.txt',delimiter=',')
     #roc_table1.columns = ['learners','fpr','tpr','auc']
-    roc_table1 = pd.read_pickle(filename)
+    ##roc_table1 = pd.read_pickle(filename)
+    filename = 'test'
     roc_table1.set_index('learners', inplace=True)
 
     fig = plt.figure(figsize=(8,6))
@@ -54,8 +55,8 @@ def roc_plot(filename):
     for i in roc_table1.index:
         label = i.replace('dappcalr','da')
         plt.plot(roc_table1.loc[i]['fpr'],
-                 roc_table1.loc[i]['tpr'],
-                 label="{}, AUC={:.3f}".format(label, roc_table1.loc[i]['auc']))
+                 roc_table1.loc[i]['tpr'])
+#                 label="{}, AUC={:.3f}".format(label, roc_table1.loc[i]['auc']))
 
     plt.plot([0,1], [0,1], color='orange', linestyle='--')
 
@@ -69,7 +70,7 @@ def roc_plot(filename):
     plt.legend(prop={'size':12}, loc='lower right', ncol=1)
 
     #plt.show()
-    fig.savefig('results//plots_realdata//plot2_'+filename.split('//')[-1].split('.')[0]+'.png')
+    fig.savefig('results//plot2_'+filename.split('//')[-1].split('.')[0]+'.png')
 
 def roc_cevae(file1, file2,nsim, modelname):
     '''
@@ -308,10 +309,10 @@ def simulation_eval(nsim):
     out_metac = pd.DataFrame(columns=['metalearners', 'precision','recall','auc','f1','f1_','prfull','refull','version','prob'])
     out_level0 = pd.DataFrame(columns=['metalearners', 'precision','recall','auc','f1','f1_','version','prob'])
     pehe = pd.DataFrame(columns=['method','pehe_noncausal', 'pehe_causal','pehe_overall','version','prob'])
-    
+
     out_diversity = []
     out_diversity_version = []
-    
+
     #proportion of known causes
     p = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]
 

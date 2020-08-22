@@ -18,6 +18,7 @@ path = 'C://Users//raque//Documents//GitHub//Summer2020MultipleCauses'
 sys.path.append(path+'//src')
 sys.path.append(path+'//parkca')
 import train as parkca
+import eval as evaluation
 
 os.chdir(path)
 
@@ -65,11 +66,12 @@ Z = clinical.drop(['ID','y'],axis=1)
 colnamesZ = Z.columns
 Z = Z.values
 y = clinical.y.values
+
 #parkca.learners_bcch(path_output, DAbool, BARTbool, X, Z, y, variants_f, colnamesZ, 'snps')
 
 
-colnames = variants_f
-x_train, x_val, holdout_mask = parkca.daHoldout(X,0.2)
-print('\n\nhere we go\n\n')
-w,z, x_gen = parkca.fm_PPCA(x_train,15,True)
-print(w.shape,z.shape)
+coef, coef_continuos, roc, coln = parkca.deconfounder_PPCA_LR(X,variants_f,y,'DA',15,100,Z,colnamesZ)
+roc_table = pd.DataFrame(columns=['learners', 'fpr','tpr','auc'])
+roc_table = roc_table.append(roc,ignore_index=True)
+evaluation.roc_plot(roc_table)
+

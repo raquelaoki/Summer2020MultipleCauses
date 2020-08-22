@@ -39,8 +39,19 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import WeightedRandomSampler
 
+#Reference: https://github.com/tensorflow/probability/blob/master/tensorflow_probability/examples/jupyter_notebooks/Probabilistic_PCA.ipynb
+
+import tensorflow.compat.v1 as tf
+from tensorflow.keras import optimizers
+tf.disable_v2_behavior()
+#import tensorflow as tf.compat.v1
+import tensorflow_probability as tfp
+from tensorflow_probability import distributions as tfd   #conda install -c conda-forge tensorflow-probability
+tf.enable_eager_execution()
+
+
 #Learners
-def deconfounder_PPCA_LR(X,colnames,y01,name,k,b, Z,colnamesZ):
+def deconfounder_PPCA_LR(X,colnames,y01,name,k,b, clinical = None,colnamesC = None):
     '''
     input:
     - X: train dataset
@@ -65,18 +76,21 @@ def deconfounder_PPCA_LR(X,colnames,y01,name,k,b, Z,colnamesZ):
         pca = np.transpose(z)
         for i in range(b):
             #print(i)
-            rows = np.random.choice(X.shape[0], int(X.shape[0]*0.85), replace=False)
-            X = X[rows, :]
+            rows = np.random.choice(X.shape[0], int(X.shape[0]*0.95), replace=False)
+            X_b = X[rows, :]
             y01_b = y01[rows]
             pca_b = pca[rows,:]
+            if clinical is not None:
+                clinical_b = clinical[rows,:]
             #w,pca, x_gen = fm_PPCA(X,k)
             #outcome model
-            coef_, _ = outcome_model_ridge(X,colnames, pca_b,y01_b,False,filename)
+            #print(len(y01_b),y01_b.sum())
+            coef_, _ = outcome_model_ridge(X_b,colnames, pca_b,y01_b,False,filename, clinical_b)
             coef.append(coef_)
 
 
+
         coef = np.matrix(coef)
-        coef = coef[:,0:X.shape[1]]
         #Building IC
         coef_m = np.asarray(np.mean(coef,axis=0)).reshape(-1)
         coef_var = np.asarray(np.var(coef,axis=0)).reshape(-1)
@@ -90,7 +104,7 @@ def deconfounder_PPCA_LR(X,colnames,y01,name,k,b, Z,colnamesZ):
         if ROC = TRUE, outcome model receive entire dataset, but internally split in training
         and testing set. The ROC results and score is just for testing set
         '''
-        del X,pca,pca_b,y01_b
+        del pca,pca_b,y01_b
         del coef_var, coef, coef_
         w,z, x_gen = fm_PPCA(X,k,False)
         _,roc =  outcome_model_ridge(X,colnames, np.transpose(z),y01,True,filename)
@@ -117,15 +131,6 @@ def fm_PPCA(train,latent_dim, flag_pred):
     output: w and z values, generated sample to predictive check
 
     '''
-    #Reference: https://github.com/tensorflow/probability/blob/master/tensorflow_probability/examples/jupyter_notebooks/Probabilistic_PCA.ipynb
-
-    import tensorflow.compat.v1 as tf
-    from tensorflow.keras import optimizers
-    tf.disable_v2_behavior()
-    #import tensorflow as tf.compat.v1
-    import tensorflow_probability as tfp
-    from tensorflow_probability import distributions as tfd   #conda install -c conda-forge tensorflow-probability
-    tf.enable_eager_execution()
 
     num_datapoints, data_dim = train.shape
     x_train = tf.convert_to_tensor(np.transpose(train),dtype = tf.float32)
@@ -250,7 +255,7 @@ def daPredCheck(x_val,x_gen,w,z,holdout_mask):
     overall_pval = np.mean(pvals)
     return overall_pval
 
-def outcome_model_ridge(x, colnames,x_latent,y01_b,roc_flag,name):
+def outcome_model_ridge(x, colnames,x_latent,y01_b,roc_flag,name, clinical=None):
     '''
     outcome model from the DA
     input:
@@ -261,9 +266,13 @@ def outcome_model_ridge(x, colnames,x_latent,y01_b,roc_flag,name):
     -name: roc name file
     '''
     import scipy.stats as st
-    model = linear_model.SGDClassifier(penalty='l2', alpha=0.1, l1_ratio=0.01,loss='modified_huber', fit_intercept=True,random_state=0)
+    model = linear_model.SGDClassifier(penalty='l2', alpha=0.01, loss='log', fit_intercept=True,random_state=0)
     if roc_flag:
         #use testing and training set
+
+        if clinical is not None:
+            x = np.concatenate([clinical,x],axis=1)
+
         x_aug = np.concatenate([x,x_latent],axis=1)
         X_train, X_test, y_train, y_test = train_test_split(x_aug, y01_b, test_size=0.33, random_state=42)
         modelcv = calibration.CalibratedClassifierCV(base_estimator=model, cv=5, method='isotonic').fit(X_train, y_train)
@@ -272,8 +281,19 @@ def outcome_model_ridge(x, colnames,x_latent,y01_b,roc_flag,name):
         pred = modelcv.predict(X_test)
         predp = modelcv.predict_proba(X_test)
         predp1 = [i[1] for i in predp]
+        print('\nTesting set\n')
         print('F1:',f1_score(y_test,pred),sum(pred),sum(y_test))
         print('Confusion Matrix', confusion_matrix(y_test,pred))
+        print('\nTraining set\n')
+        pred_train = modelcv.predict(X_train)
+        print('F1:',f1_score(y_train,pred_train))
+        print('Confusion Matrix', confusion_matrix(y_train,pred_train))
+
+        print('\nRandom:\n')
+        random = np.random.binomial(1,sum(y_test)/len(y_test),len(y_test))
+        print('F1:',f1_score(y_test,random),sum(random),sum(y_test))
+        print('Confusion Matrix', confusion_matrix(y_test,random))
+
         fpr, tpr, _ = roc_curve(y_test, predp1)
         auc = roc_auc_score(y_test, predp1)
         roc = {'learners': name,
@@ -282,7 +302,10 @@ def outcome_model_ridge(x, colnames,x_latent,y01_b,roc_flag,name):
                'auc':auc}
     else:
         #don't split dataset
+        if clinical is not None:
+            x = np.concatenate([clinical,x], axis =1)
         x_aug = np.concatenate([x,x_latent],axis=1)
+
         model.fit(x_aug, y01_b)
         coef = model.coef_[0]
         roc = {}
