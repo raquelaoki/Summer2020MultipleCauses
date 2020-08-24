@@ -259,8 +259,9 @@ def diversity(colb,colda, data1):
 
     q_ = []
     X = X.to_numpy()
-    for i in range(X.shape[1]-1):
-        for j in range(i+1,X.shape[1]):
+    up = len(colb)+len(colda)
+    for i in range(up-1):
+        for j in range(i+1,up):
             tn, fp, fn, tp = confusion_matrix(X[:,i],X[:,j]).ravel()
             q_ij = (tp*tn-fp*fn)/(tp*tn+fp*fn)
             q_.append(q_ij)

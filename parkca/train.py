@@ -6,6 +6,7 @@ MODIFICATION FOR BC CHILDREN HOSPITAL
 import pandas as pd
 import numpy as np
 import warnings
+import os
 warnings.simplefilter("ignore")
 import eval as eval
 #import datapreprocessing as dp
@@ -312,7 +313,7 @@ def outcome_model_ridge(x, colnames,x_latent,y01_b,roc_flag,name, clinical=None)
 
     return coef, roc
 
-def learners_bcch(path_output, DA, BART, X, Z, y, colnamesX, colnamesZ, causes):
+def learners_bcch(path_output, DA, BART, X, y, colnamesX,causes, Z = None,colnamesZ=None):
     '''
     input:
         path_output: where to save the files
@@ -323,7 +324,7 @@ def learners_bcch(path_output, DA, BART, X, Z, y, colnamesX, colnamesZ, causes):
     '''
     if DA:
         print('DA')
-        k_list = [15, 30, 100]
+        k_list = [15]
         b = 100
         for k in k_list:
             coefk_table = pd.DataFrame(columns=[causes])
@@ -332,21 +333,36 @@ def learners_bcch(path_output, DA, BART, X, Z, y, colnamesX, colnamesZ, causes):
 
             coef, coef_continuos, roc, coln = deconfounder_PPCA_LR(X,colnamesX,y,'DA',k,b,Z,colnamesZ)
             roc_table = roc_table.append(roc,ignore_index=True)
+
+            if Z is not None:
+                end = len(colnamesZ) + len(colnamesX)
+                coef = coef[len(colnamesZ):end]
+                coef_continuos = coef_continuos[len(colnamesZ):end]
+            else:
+                coef = coef[0:len(colnamesX)]
+                coef_continuos = coef_continuos[0:len(colnamesX)]
+
             coefk_table[coln] = coef
             coefkc_table[coln] = coef_continuos
 
             print('--------- DONE ---------')
-            coefk_table[causes] = colnames
-            coefkc_table[causes] = colnames
+            coefk_table[causes] = colnamesX
+            coefkc_table[causes] = colnamesX
 
             roc_table.to_pickle(path_output+'//roc_'+str(k)+'.txt')
             coefkc_table.to_pickle(path_output+'//coefcont_'+str(k)+'.txt')
     if BART:
-        print('BART')
-        #MODEL AND PREDICTIONS MADE ON R
+        print('BART or CEVAE - Loading results')
+        #MODEL AND PREDICTIONS MADE ON R or NOTEBOOK
+        cevae = join_simulation(path_output)
+        #print(len(cevae['cate']),len(coef), len(coef_continuos))
+        data = pd.DataFrame({'snps':colnamesX,'cevae':cevae['cate'],'coef':coef, 'coef_c':coef_continuos})
+        data.to_csv(path_output+'\\level1data.txt', sep=';')
         #filenames=[path_output+'//bart_all.txt',path_output+'//bart_MALE.txt',path_output+'//bart_FEMALE.txt']
         #eval.roc_table_creation(filenames,'bart')
         #eval.roc_plot('results//roc_'+'bart'+'.txt')
+        return data
+
 
 def learners(APPLICATIONBOOL, DABOOL, BARTBOOL, CEVAEBOOL,path ):
     '''
@@ -434,7 +450,7 @@ def classification_models(y,y_,X,X_,name_model):
     else:
 
         if name_model == 'adapter':
-            estimator = SVC(C=0.3, kernel='rbf',gamma='scale',probability=True)
+            estimator = SVC(C=4, kernel='linear',gamma='scale',probability=True) #C = 0.3
             model = PUAdapter(estimator, hold_out_ratio=0.1)
             X = np.matrix(X)
             y0 = np.array(y)
@@ -478,7 +494,7 @@ def classification_models(y,y_,X,X_,name_model):
             print('rd',X.shape[1])
             w = len(y)/y.sum()
             sample_weight = np.array([w if i == 1 else 1 for i in y])
-            model = RandomForestClassifier(max_depth=12, random_state=0)
+            model = RandomForestClassifier(max_depth=8, random_state=0)
             model.fit(X, y,sample_weight = sample_weight)
 
         else:
@@ -545,6 +561,7 @@ def meta_learner(data1, models, prob ):
     #Some causes are unknown or labeled as 0
     y_train = [i if np.random.binomial(1,prob,1)[0]==1 else 0 for i in y_train]
     y_train = pd.Series(y_train)
+
 
     for m in models:
         roc, yfull, y_pred = classification_models(y_train, y_test, X_train, X_test,m)
@@ -672,3 +689,58 @@ def nn_classifier(y_train, y_test, X_train, X_test,X_full):
     y_pred = akkuracy(net, X_test)
     yfull = akkuracy(net, X_full)
     return y_pred, yfull
+
+
+def join_simulation(path, version = None):
+    '''
+    the simulations were break down in several files;
+    this function join the files from a same simulated dataset
+    input: path files and dataset version
+    output: a unique file with the cate of all treatments in a simulated dataset
+
+    '''
+
+    letter = ['a','b','c','d','e','f','g','h']
+    files = []
+
+    for l in letter:
+        check = path+'//cevae_output_sim_'+str(l)+'.txt'
+        if os.path.isfile(check):
+            files.append(check)
+
+
+    sim = pd.read_pickle(files[0])
+    if len(files) > 1:
+        for i in range(len(files)-1):
+            #sim0 = sim0.iloc[0:3599,:]
+            part = pd.read_pickle(files[i+1])
+            sim = pd.concat([sim,part],axis = 0)
+
+    sim.reset_index(inplace = True,drop = True)
+    sim['cate'].fillna(0, inplace = True)
+    return sim
+
+
+def data_norm(data1):
+    '''
+    normalized data x- mean/sd
+    input: dataset to be normalized
+    output: normalized dataset
+
+    '''
+    data1o = np.zeros(data1.shape)
+    data1o[:,-1] = data1.iloc[:,-1]
+
+    for i in range(0,data1.shape[1]-1):
+        nonzero = []
+        for j in range(data1.shape[0]):
+            if data1.iloc[j,i]!=0:
+                nonzero.append(data1.iloc[j,i])
+        for j in range(data1.shape[0]):
+            if data1.iloc[j,i]!= 0:
+                data1o[j,i] = (data1.iloc[j,i] - np.mean(nonzero))/np.sqrt(np.var(nonzero))
+
+    data1o = pd.DataFrame(data1o)
+    data1o.index = data1.index
+    data1o.columns = data1.columns
+    return data1o
