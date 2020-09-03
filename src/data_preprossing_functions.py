@@ -36,11 +36,11 @@ def clinical_filtering(path):
     #'CisplatinDose (mg/m2)', 'CisplatinDuration (days)','Carboplatin (1=yes,0=no)',  'y'
     keep = ['ID',  'Sex (1=male, 0=female)', 'AgeTreatmentInitiation (years)', 
             'CisplatinDose (mg/m2)', 'CisplatinDuration (days)',
-            'Carboplatin (1=yes,0=no)',  'y']
+            'Carboplatin (1=yes,0=no)', 'VincristineBeforeOto (1=yes,0=no)', 'y']
     clinical_1 = clinical_[keep]
     clinical_1=clinical_1.rename(columns ={'Sex (1=male, 0=female)':'sex', 'AgeTreatmentInitiation (years)':'age', 
             'CisplatinDose (mg/m2)':'cisp_dose', 'CisplatinDuration (days)':'cisp_dur',
-            'Carboplatin (1=yes,0=no)':'carb'})
+            'Carboplatin (1=yes,0=no)':'carb', 'VincristineBeforeOto (1=yes,0=no)':'vinc'})
     print('New Clinical Info Shape:', clinical_1.shape)
     print(clinical_1.head())
     return clinical_1

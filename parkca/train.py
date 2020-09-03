@@ -423,7 +423,7 @@ def learners(APPLICATIONBOOL, DABOOL, BARTBOOL, CEVAEBOOL,path ):
             eval.roc_plot_all(filenames)
 
 #Meta-learner
-def classification_models(y,y_,X,X_,name_model):
+def classification_models(y,y_,X,X_,name_model,y_full,X_full):
     """
     Input:
         X,y,X_test, y_test: dataset to train the model
@@ -432,25 +432,29 @@ def classification_models(y,y_,X,X_,name_model):
         cm_: confusion matrix for the full dataset
         y_all_: prediction for the full dataset
     """
-    X_full = np.concatenate((X,X_), axis = 0 )
-    y_full = np.concatenate((y,y_), axis = 0)
+    #X_full = np.concatenate((X,X_), axis = 0 )
+    #y_full = np.concatenate((y,y_), axis = 0)
 
     warnings.filterwarnings("ignore")
     if name_model == 'nn':
-        y_pred, ypred = nn_classifier(y, y_, X, X_,X_full)
+        y_pred, ypred = nn_classifier(y, y_, X, X_,X_full.values)
         pr = precision(1,confusion_matrix(y_,y_pred))
         f1 = f1_score(y_,y_pred)
-        if np.isnan(pr) or pr==0 or f1<0.06:
-            while np.isnan(pr) or pr ==0 or f1<0.06:
+        if np.isnan(pr) or pr==0 or f1<0.01:
+            while np.isnan(pr) or pr ==0 or f1<0.001:
                 print('\n\n trying again \n\n')
                 y_pred, ypred = nn_classifier(y, y_, X, X_,X_full)
                 pr = precision(1,confusion_matrix(y_,y_pred))
                 f1 = f1_score(y_,y_pred)
+                print(f1,confusion_matrix(y_,y_pred))
+        print('\n Model:',name_model,':\nFull set: tn, fp, fn, tp\n',confusion_matrix(y_full,ypred))
+        print('\nPrecision (test)',precision(1,confusion_matrix(y_,y_pred)))
+        print('Recall (test)',recall(1,confusion_matrix(y_,y_pred)))
 
     else:
 
         if name_model == 'adapter':
-            estimator = SVC(C=4, kernel='linear',gamma='scale',probability=True) #C = 0.3
+            estimator = SVC(C=100, kernel='rbf',gamma='scale',probability=True) #C = 0.3
             model = PUAdapter(estimator, hold_out_ratio=0.1)
             X = np.matrix(X)
             y0 = np.array(y)
@@ -466,7 +470,7 @@ def classification_models(y,y_,X,X_,name_model):
             and https://github.com/t-sakai-kure/pywsl/blob/master/examples/pul/upu/demo_upu.py
              '''
             print('upu', X.shape[1])
-            prior =.5 #change for the proportion of 1 and 0
+            prior =.48 #change for the proportion of 1 and 0
             param_grid = {'prior': [prior],
                               'lam': np.logspace(-3, 3, 5), #what are these values
                               'basis': ['lm']}
@@ -486,7 +490,7 @@ def classification_models(y,y_,X,X_,name_model):
             w1 = y.sum()/len(y)
             w0 = 1 - w1
             sample_weight = {0:w1,1:w0}
-            model = LogisticRegression(C=.1,class_weight=sample_weight,penalty='l2') #
+            model = LogisticRegression(C=0.1,penalty='l2',class_weight=sample_weight) #
             model.fit(X,y)
 
 
@@ -494,7 +498,7 @@ def classification_models(y,y_,X,X_,name_model):
             print('rd',X.shape[1])
             w = len(y)/y.sum()
             sample_weight = np.array([w if i == 1 else 1 for i in y])
-            model = RandomForestClassifier(max_depth=8, random_state=0)
+            model = RandomForestClassifier(max_depth=6, random_state=0)
             model.fit(X, y,sample_weight = sample_weight)
 
         else:
@@ -508,6 +512,15 @@ def classification_models(y,y_,X,X_,name_model):
         else:
             y_pred = model.predict(X_)
             ypred = model.predict(X_full)
+            y_prob_full = model.predict_proba(X_full)
+
+            y_pred = np.where(y_pred==-1,0,y_pred)
+            ypred = np.where(ypred==-1,0,ypred)
+
+            print('\n Model:',name_model,':\nFull set: tn, fp, fn, tp\n',confusion_matrix(y_full,ypred).ravel())
+            print('\nTest  set: tn, fp, fn, tp\n',confusion_matrix(y_,y_pred).ravel())
+            print('\nPrecision (test)',precision(1,confusion_matrix(y_,y_pred)))
+            print('Recall (test)',recall(1,confusion_matrix(y_,y_pred)))
 
         if name_model =='uajfiaoispu':
             print(y_pred)
@@ -516,8 +529,8 @@ def classification_models(y,y_,X,X_,name_model):
             print('\nPrecision ',precision(1,confusion_matrix(y_,y_pred)))
             print('Recall',recall(1,confusion_matrix(y_,y_pred)))
 
-        y_pred = np.where(y_pred==-1,0,y_pred)
-        ypred = np.where(ypred==-1,0,ypred)
+        #y_pred = np.where(y_pred==-1,0,y_pred)
+        #ypred = np.where(ypred==-1,0,ypred)
 
     pr = precision(1,confusion_matrix(y_,y_pred))
     re = recall(1,confusion_matrix(y_,y_pred))
@@ -531,7 +544,7 @@ def classification_models(y,y_,X,X_,name_model):
 
     roc = {'metalearners': name_model,'precision':pr ,'recall':re,'auc':auc,'f1':f1,'f1_':f1_,'prfull':prfull,'refull':refull}
     warnings.filterwarnings("default")
-    return roc, ypred, y_pred
+    return roc, ypred, y_pred, y_prob_full
 
 def precision(label, confusion_matrix):
     col = confusion_matrix[:, label]
@@ -562,9 +575,10 @@ def meta_learner(data1, models, prob ):
     y_train = [i if np.random.binomial(1,prob,1)[0]==1 else 0 for i in y_train]
     y_train = pd.Series(y_train)
 
+    predictions = pd.DataFrame(columns = models)
 
     for m in models:
-        roc, yfull, y_pred = classification_models(y_train, y_test, X_train, X_test,m)
+        roc, yfull, y_pred, y_prob_full = classification_models(y_train, y_test, X_train, X_test,m,y,X)
         #tp_genes.append(flat_index[np.equal(tp_genes01,1)])
         roc_table = roc_table.append(roc,ignore_index=True)
         #ensemble
@@ -572,6 +586,7 @@ def meta_learner(data1, models, prob ):
             e_full += yfull
             e_pred += y_pred
             e += 1
+            predictions[m] = yfull
 
     #finishing ensemble
     e_full = np.divide(e_full,e)
@@ -579,18 +594,20 @@ def meta_learner(data1, models, prob ):
     e_full= [1 if i>0.5 else 0 for i in e_full]
     e_pred= [1 if i>0.5 else 0 for i in e_pred]
 
+
     #fpr, tpr, _ = roc_curve(y_test,e_pred)
     pr = precision(1,confusion_matrix(y_test,e_pred))
     re = recall(1,confusion_matrix(y_test,e_pred))
     prfull = precision(1,confusion_matrix(np.hstack([y_test,y_train]),e_full))
     refull = recall(1,confusion_matrix(np.hstack([y_test,y_train]),e_full))
+    print('Emsemble:\n',confusion_matrix(np.hstack([y_test,y_train]),e_full), 'precision and recall:',pr,re)
 
     auc = roc_auc_score(y_test,e_pred)
     f1 = f1_score(np.hstack([y_test,y_train]),e_full)
     f1_ = f1_score(y_test,e_pred)
     roc = {'metalearners': 'ensemble','precision':pr ,'recall':re,'auc':auc,'f1':f1,'f1_':f1_,'prfull':prfull,'refull':refull}
     roc_table = roc_table.append(roc,ignore_index=True)
-    return roc_table
+    return roc_table, predictions, y_prob_full
 
 def nn_classifier(y_train, y_test, X_train, X_test,X_full):
     '''
@@ -650,7 +667,7 @@ def nn_classifier(y_train, y_test, X_train, X_test,X_full):
     loss_func = T.nn.BCELoss()  # softmax() + binary CE
     optimizer = T.optim.SGD(net.parameters(), lr=lrn_rate)
     max_epochs = 500
-    n_items = len(X_train)
+    n_items = 8000
     batcher = Batcher(n_items, bat_size)
     X_test = X_test.values
     X_train = X_train.values
@@ -667,7 +684,7 @@ def nn_classifier(y_train, y_test, X_train, X_test,X_full):
     X_train2 = pd.concat([df_class_0_under, df_class_1_over], axis=0)
     X_train2['y']= np.repeat([0,1],4000)
     X_train2 = X_train2.sample(frac=1).reset_index(drop=True)
-
+    #print(X_train2.tail())
     y_train2 = X_train2['y']
     X_train2 = X_train2.drop(['y'], axis=1)
 
