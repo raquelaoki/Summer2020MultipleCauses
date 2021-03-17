@@ -32,16 +32,15 @@ def clinical_filtering(clinical):
   #x days -> x
   columns_mix_numbers_string = ['VancomycinConcomitantDuration (days)','TobramycinConcomitantDuration (days)',
                                 'GentamicinConcomitantDuration (days)','AmikacinConcomitantDuration (days)',
-                                'FurosemideConcomitantDuration (days)']
+                                'FurosemideConcomitantDuration (days)', 'CarboplatinExactDuration (days)',
+                                'CisplatinExactDuration (days)', 'CarboplatinDose_cumulative(mg/m2)']
   for column in columns_mix_numbers_string:
-    clinical_[column] = ['0 days' if item == 0 else item for item in clinical_[column]]
-    clinical_[column] = clinical_[column].str.extract('(\d+)')
+      clinical_[column] = [str(item)+' days' if str(item).isdigit() else item for item in clinical_[column]]
+      clinical_[column] = clinical_[column].str.extract('(\d+)')
 
   #categorical variables to binary
   clinical_['Otoprotectant_Given'] = [0 if item == 'Not given' else 1 for item in clinical_['Otoprotectant_Given']]
   clinical_['Array'] = [0 if item == 'Omni' else 1 for item in clinical_['Array']]
-
-  #remove any remain nans
   clinical_ = clinical_.dropna()
   print('# Filter 2: final shape', clinical_.shape)
   return clinical_
@@ -143,11 +142,14 @@ def run_preprocessing(path, save_files = False):
     data_df_, variants_f, cadd_f, ks_f = eliminate_low_incidence(data_df_, variants_f, cadd_f, ks_f)
     data_df_, variants_f, cadd_f, ks_f = eliminate_low_cadd(data_df_, variants_f, cadd_f, ks_f)
     y = clinical_['y']
-    clinical_ = clinical_.drop(["CIO_Grade",'y'], axis = 1)
+    clinical_ = clinical_.drop(["CIO_Grade",'y','ID'], axis = 1)
+    x_clinical_names = clinical_.columns
     if save_files:
+        print('Saving files....')
         np.save('y',y)
-        np.save('x_clinical', clinical_)
+        np.save('x_clinical', clinical_.values)
         np.save('x_snps', data_df_)
         np.save('x_colnames', variants_f)
+        np.save('x_clinical_names', x_clinical_names)
 
-    return y,clinical_ , data_df_, variants_f
+    return y,clinical_ , data_df_, variants_f, x_clinical_names

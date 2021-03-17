@@ -28,9 +28,9 @@ from scipy import sparse, stats
 import functools
 #Meta-leaners packages
 #https://github.com/aldro61/pu-learning (clone)
-from puLearning.puAdapter import PUAdapter
+#from puLearning.puAdapter import PUAdapter
 #https://github.com/t-sakai-kure/pywsl
-from pywsl.pul import pu_mr #pumil_mr (pip install pywsl)
+#from pywsl.pul import pu_mr #pumil_mr (pip install pywsl)
 #from pywsl.utils.syndata import gen_twonorm_pumil
 #from pywsl.utils.comcalc import bin_clf_err
 #NN
@@ -82,7 +82,10 @@ def deconfounder_PPCA_LR(X,colnames,y01,name,k,b, clinical = None,colnamesC = No
             y01_b = y01[rows]
             pca_b = pca[rows,:]
             if clinical is not None:
+                print('Im here')
+                #print('SHAPES', X.shape, clinical.shape, len(y01), pca.shape)
                 clinical_b = clinical[rows,:]
+                #print('it works', clinical_b.shape)
             #w,pca, x_gen = fm_PPCA(X,k)
             #outcome model
             #print(len(y01_b),y01_b.sum())
