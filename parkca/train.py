@@ -72,7 +72,7 @@ def deconfounder_PPCA_LR(X,colnames,y01,name,k,b, clinical = None,colnamesC = No
     #To speed up, I wont fit the PPCA to each boostrap iteration
     del x_gen
     if 0.1 < pvalue and pvalue < 0.9:
-        print('Pass Predictive Check:', filename, '(',str(pvalue),')' )
+        print('...Pass Predictive Check:', filename, '(',str(pvalue),')' )
         coef= []
         pca = np.transpose(z)
         for i in range(b):
@@ -82,7 +82,7 @@ def deconfounder_PPCA_LR(X,colnames,y01,name,k,b, clinical = None,colnamesC = No
             y01_b = y01[rows]
             pca_b = pca[rows,:]
             if clinical is not None:
-                print('Im here')
+                #print('Im here')
                 #print('SHAPES', X.shape, clinical.shape, len(y01), pca.shape)
                 clinical_b = clinical[rows,:]
                 #print('it works', clinical_b.shape)
@@ -285,18 +285,19 @@ def outcome_model_ridge(x, colnames,x_latent,y01_b,roc_flag,name, clinical=None)
         pred = modelcv.predict(X_test)
         predp = modelcv.predict_proba(X_test)
         predp1 = [i[1] for i in predp]
-        print('\nTesting set\n')
-        print('F1:',f1_score(y_test,pred),sum(pred),sum(y_test))
-        print('Confusion Matrix', confusion_matrix(y_test,pred))
-        print('\nTraining set\n')
+        print('\n...Training set:')
         pred_train = modelcv.predict(X_train)
-        print('F1:',f1_score(y_train,pred_train))
-        print('Confusion Matrix', confusion_matrix(y_train,pred_train))
+        print('......F1:',f1_score(y_train,pred_train))
+        print('......Confusion Matrix', confusion_matrix(y_train,pred_train).ravel())
 
-        print('\nRandom:\n')
+        print('\n...Testing set:')
+        print('......F1:',f1_score(y_test,pred),sum(pred),sum(y_test))
+        print('......Confusion Matrix', confusion_matrix(y_test,pred).ravel())
+
+        print('\n...Random:')
         random = np.random.binomial(1,sum(y_test)/len(y_test),len(y_test))
-        print('F1:',f1_score(y_test,random),sum(random),sum(y_test))
-        print('Confusion Matrix', confusion_matrix(y_test,random))
+        print('......F1:',f1_score(y_test,random),sum(random),sum(y_test))
+        print('......Confusion Matrix', confusion_matrix(y_test,random).ravel())
 
         fpr, tpr, _ = roc_curve(y_test, predp1)
         auc = roc_auc_score(y_test, predp1)
@@ -326,7 +327,7 @@ def learners_bcch(path_output, DA, BART, X, y, colnamesX,causes, Z = None,colnam
         causes: name of the potential causes (snps)
     '''
     if DA:
-        print('DA')
+        print('Learner: DA')
         k_list = [15]
         b = 100
         for k in k_list:
@@ -352,8 +353,8 @@ def learners_bcch(path_output, DA, BART, X, y, colnamesX,causes, Z = None,colnam
             coefk_table[causes] = colnamesX
             coefkc_table[causes] = colnamesX
 
-            roc_table.to_pickle(path_output+'//roc_'+str(k)+'.txt')
-            coefkc_table.to_pickle(path_output+'//coefcont_'+str(k)+'.txt')
+            roc_table.to_pickle(path_output+'//learner_da_roc_'+str(k)+'.txt')
+            coefkc_table.to_pickle(path_output+'//clearner_da_coefcont_'+str(k)+'.txt')
     if BART:
         print('BART or CEVAE - Loading results')
         #MODEL AND PREDICTIONS MADE ON R or NOTEBOOK
@@ -386,7 +387,8 @@ def learners(APPLICATIONBOOL, DABOOL, BARTBOOL, CEVAEBOOL,path ):
         b =100
 
         if DABOOL:
-            print('DA')
+            print('Learner: DA')
+            print('... evaluating DA learner')
             skip = ['CHOL','LUSC','HNSC','PRAD'] #F1 score very low
             for k in k_list:
                  coefk_table = pd.DataFrame(columns=['genes'])

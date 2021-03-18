@@ -25,7 +25,7 @@ def clinical_filtering(clinical):
 
   #Create Y: CIO grade: 0 -> 0, 2-4 -> 1 (hearing loss happened)
   #clinical_ = clinical_.astype({'CIO_Grade': 'int32'})
-  clinical_['y']=[0 if item == 1 else 1 for item in clinical_.CIO_Grade]
+  clinical_['y']=[0 if item == 0 else 1 for item in clinical_.CIO_Grade]
   #fillna columns with NAN values (from 0 days or 0 doses)
   clinical_.fillna(0, inplace = True)
 
