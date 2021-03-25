@@ -4,4 +4,5 @@ parkca/__pycache__/
 parkca/puLearning/
 results/
 results_old2020/
+.idea/
 .DS_Store
