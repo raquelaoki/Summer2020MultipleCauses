@@ -28,6 +28,10 @@ from tensorflow.keras import optimizers
 import tensorflow_probability as tfp
 from tensorflow_probability import distributions as tfd  # conda install -c conda-forge tensorflow-probability
 from bartpy.sklearnmodel import SklearnModel
+from torch import optim
+import torch.distributions
+import torch.nn.functional as F
+from torch.distributions import bernoulli, normal
 
 tf.disable_v2_behavior()
 tf.enable_eager_execution()
@@ -44,6 +48,7 @@ warnings.simplefilter("ignore")
 # from pywsl.pul import pu_mr #pumil_mr (pip install pywsl)
 # from pywsl.utils.syndata import gen_twonorm_pumil
 # from pywsl.utils.comcalc import bin_clf_err
+
 
 def learners(LearnersList, X, y, colnamesX, id='', Z=None, colnamesZ=None, path_output=None):
     """
@@ -82,6 +87,7 @@ def learners(LearnersList, X, y, colnamesX, id='', Z=None, colnamesZ=None, path_
         model_bart.fit()
         print('...... predictions')
         coef_table['BART'] = ''
+        # TODO: add cate
         # predictions = model.predict(x_snps)  # [:,0:1000] Make predictions on the train set
         # print(predictions[0])
         print('Done!')
@@ -89,17 +95,18 @@ def learners(LearnersList, X, y, colnamesX, id='', Z=None, colnamesZ=None, path_
         print('\n\nAdding noise')
         coef_table['noise'] = np.random.normal(0, 1, len(colnamesX))
         print(coef_table.head())
-    # TODO: CATE
     return coef_table
 
 
-def meta_learner(level1data, MetaLearnerList, target='y_out', prob=1, ensemble=False):
+def meta_learner(level1data, MetaLearnerList, target='y_out', prob=1, ensemble=False, print_out=False):
     """
     Run the meta-learner
     input:
     - level 1 data (coeficients): learners output
     output:
     - roc table on the level 1 data: how well it identifies new causes
+    - predictions: causal or not causal according to meta-learner
+    - y_full_prob: prob of being causal - RF only for now
     """
     roc_table = pd.DataFrame(columns=['metalearners', 'pr_test',
                                       're_test', 'auc_test', 'f1_test',
@@ -107,7 +114,9 @@ def meta_learner(level1data, MetaLearnerList, target='y_out', prob=1, ensemble=F
     # split data trainint and testing
     y = level1data[target]
     X = level1data.drop([target], axis=1)
-    y_train, y_test, X_train, X_test = train_test_split(y, X, test_size=0.33, random_state=32)
+    y_train, y_test, X_train, X_test, c_train, c_test = train_test_split(y, X, level1data.index.values,
+                                                                         test_size=0.33, random_state=32)
+    causes_order = np.concatenate([c_train, c_test], 0)
 
     # starting ensemble
     if ensemble:
@@ -126,7 +135,8 @@ def meta_learner(level1data, MetaLearnerList, target='y_out', prob=1, ensemble=F
     predictions = pd.DataFrame(columns=MetaLearnerList)
 
     for m in MetaLearnerList:
-        roc, y_test_pred, y_full_pred, y_full_prob = classification_models(y_train, y_test, X_train, X_test, m)
+        roc, y_test_pred, y_full_pred, y_full_prob = classification_models(y_train, y_test, X_train, X_test, m,
+                                                                           print_out)
         roc_table = roc_table.append(roc, ignore_index=True)
         predictions[m] = y_full_pred
 
@@ -139,13 +149,16 @@ def meta_learner(level1data, MetaLearnerList, target='y_out', prob=1, ensemble=F
             e_test_pred = np.divide(e_test_pred, e)
             e_full_pred = [1 if i > 0.5 else 0 for i in e_full_pred]
             e_test_pred = [1 if i > 0.5 else 0 for i in e_test_pred]
-            print('... Testing set F1-score ', f1_score(y_test, e_test_pred))
-            print('... Precision and Recall ', precision_score(y_test, e_test_pred), recall_score(y_test, e_test_pred))
-            print('... Confusion Matrix ', confusion_matrix(y_test, e_test_pred))
+            if print_out:
+                print('... Testing set F1-score ', f1_score(y_test, e_test_pred))
+                print('... Precision and Recall ', precision_score(y_test, e_test_pred),
+                      recall_score(y_test, e_test_pred))
+                print('... Confusion Matrix \n', confusion_matrix(y_test, e_test_pred))
 
-            print('... Full set F1-score ', f1_score(y_full, e_full_pred))
-            print('... Precision and Recall ', precision_score(y_full, e_full_pred), recall_score(y_full, e_full_pred))
-            print('... Confusion Matrix ', confusion_matrix(y_full, e_full_pred))
+                print('... Full set F1-score ', f1_score(y_full, e_full_pred))
+                print('... Precision and Recall ', precision_score(y_full, e_full_pred),
+                      recall_score(y_full, e_full_pred))
+                print('... Confusion Matrix \n', confusion_matrix(y_full, e_full_pred))
 
             roc = {'metalearners': 'Ensemble',
                    'pr_test': precision_score(y_test, e_test_pred),
@@ -156,11 +169,12 @@ def meta_learner(level1data, MetaLearnerList, target='y_out', prob=1, ensemble=F
                    're_full': recall_score(y_full, e_full_pred),
                    'f1_full': f1_score(y_full, e_full_pred)}
             roc_table = roc_table.append(roc, ignore_index=True)
+    predictions['causes'] = causes_order
+    predictions.set_index('causes', inplace=True)
+    return roc_table, predictions, y_full_prob
 
-    return roc_table, predictions
 
-
-def classification_models(y_train, y_test, X_train, X_test, name_model):
+def classification_models(y_train, y_test, X_train, X_test, name_model, print_out):
     """
     Classifiers used on the meta-learner
     Input:
@@ -174,6 +188,9 @@ def classification_models(y_train, y_test, X_train, X_test, name_model):
     X_full = np.concatenate((X_train, X_test), axis=0)
     y_full = np.concatenate((y_train, y_test), axis=0)
     warnings.filterwarnings("ignore")
+    y_full_prob = None
+    skip = False
+
     if name_model == 'nn':
         print('Meta-learner: NN')
         y_test_pred, y_full_pred = nn_classifier(y_train, X_train, X_test, X_full)
@@ -183,21 +200,19 @@ def classification_models(y_train, y_test, X_train, X_test, name_model):
             while np.isnan(pr) or pr == 0 or f1 < 0.001:
                 print('...... trying again')
                 y_test_pred, y_full_pred = nn_classifier(y_train, X_train, X_test, X_full)
-                # pr = precision_score(y_test, y_test_pred)
-                # f1 = f1_score(y_test, y_test_pred)
-                # print(f1, confusion_matrix(y_test, y_test_pred))
-        # print('... Testing set: Precision / Recall',
-        # precision(1, confusion_matrix(y_, y_pred)), recall(1, confusion_matrix(y_, y_pred)))
-
     elif name_model == 'adapter':
         print('Meta-learner: PU-adapter')
-        estimator = SVC(C=100, kernel='rbf', gamma='scale', probability=True)  # C = 0.3
-        model = PUAdapter(estimator, hold_out_ratio=0.1)
-        y0 = np.array(y_train)
-        y0[np.where(y0 == 0)[0]] = -1
-        model.fit(X_train, y0)
-        y_test_pred, y_full_pred = model.predict(X_test), model.predict(X_full)
-        y_full_prob = model.predict_proba(X_full)
+        try:
+            estimator = SVC(C=100, kernel='rbf', gamma='scale', probability=True)  # C = 0.3
+            model = PUAdapter(estimator, hold_out_ratio=0.1)
+            y0 = np.array(y_train)
+            y0[np.where(y0 == 0)[0]] = -1
+            model.fit(X_train, y0)
+            y_test_pred, y_full_pred = model.predict(X_test), model.predict(X_full)
+        except NameError:
+            print('Library Missing')
+            print("Check: https://github.com/aldro61/pu-learning")
+            skip = True
 
     elif name_model == 'upu':
         """
@@ -208,18 +223,21 @@ def classification_models(y_train, y_test, X_train, X_test, name_model):
         and https://github.com/t-sakai-kure/pywsl/blob/master/examples/pul/upu/demo_upu.py
         """
         print('Meta-learner: UPU')
-        prior = .48  # change for the proportion of 1 and 0
-        param_grid = {'prior': [prior],
-                      'lam': np.logspace(-3, 3, 5),  # what are these values
-                      'basis': ['lm']}
-        # upu (Unbiased PU learning)
-        # https://github.com/t-sakai-kure/pywsl/blob/master/examples/pul/upu/demo_upu.py
-        model = GridSearchCV(estimator=pu_mr.PU_SL(),
-                             param_grid=param_grid, cv=3, n_jobs=-1)
-        model.fit(X_train, y_train)
-        y_test_pred, y_full_pred = model.predict(X_test), model.predict(X_full)
-        y_full_prob = model.predict_proba(X_full)
-
+        try:
+            prior = .48  # change for the proportion of 1 and 0
+            param_grid = {'prior': [prior],
+                          'lam': np.logspace(-3, 3, 5),  # what are these values
+                          'basis': ['lm']}
+            # upu (Unbiased PU learning)
+            # https://github.com/t-sakai-kure/pywsl/blob/master/examples/pul/upu/demo_upu.py
+            model = GridSearchCV(estimator=pu_mr.PU_SL(),
+                                 param_grid=param_grid, cv=3, n_jobs=-1)
+            model.fit(X_train, y_train)
+            y_test_pred, y_full_pred = model.predict(X_test), model.predict(X_full)
+        except NameError:
+            print('Library Missing')
+            print("Check: https://github.com/t-sakai-kure/pywsl")
+            skip = True
     elif name_model == 'lr':
         print('Meta-learner: LR')
         from sklearn.linear_model import LogisticRegression
@@ -229,35 +247,44 @@ def classification_models(y_train, y_test, X_train, X_test, name_model):
         model = LogisticRegression(C=0.1, penalty='l2', class_weight=sample_weight)  #
         model.fit(X_train, y_train)
         y_test_pred, y_full_pred = model.predict(X_test), model.predict(X_full)
-        y_full_prob = model.predict_proba(X_full)
 
     elif name_model == 'rf':
         print('Meta-learner: RF')
         w = len(y_train) / y_train.sum()
-        sample_weight = np.array([w if i == 1 else 1 for i in y])
-        model = RandomForestClassifier(max_depth=6, random_state=0)
+        sample_weight = np.array([w if i == 1 else 1 for i in y_train])
+        model = RandomForestClassifier(max_depth=7, random_state=1)
         model.fit(X_train, y_train, sample_weight=sample_weight)
         y_test_pred, y_full_pred = model.predict(X_test), model.predict(X_full)
         y_full_prob = model.predict_proba(X_full)
-
     else:
         print('Meta-learner: Random')
         w1 = y_train.sum() / len(y_train)
         # p_full = p / (len(y) + len(y_))
         y_test_pred = np.random.binomial(n=1, p=w1, size=X_test.shape[0])
         y_full_pred = np.random.binomial(n=1, p=w1, size=X_full.shape[0])
-        y_full_prob = np.random.uniform(0, 1, size=1)
+
+    if skip:
+        roc = {'metalearners': name_model,
+               'pr_test': np.nan,
+               're_test': np.nan,
+               'auc_test': np.nan,
+               'f1_test': np.nan,
+               'pr_full': np.nan,
+               're_full': np.nan,
+               'f1_full': np.nan}
+        return roc, None, None, y_full_prob
 
     y_test_pred = np.where(y_test_pred == -1, 0, y_test_pred)
     y_full_pred = np.where(y_full_pred == -1, 0, y_full_pred)
 
-    print('... Testing set F1-score ', f1_score(y_test, y_test_pred))
-    print('... Precision and Recall ', precision_score(y_test, y_test_pred), recall_score(y_test, y_test_pred))
-    print('... Confusion Matrix ', confusion_matrix(y_test, y_test_pred))
+    if print_out:
+        print('... Testing set F1-score ', f1_score(y_test, y_test_pred))
+        print('... Precision and Recall ', precision_score(y_test, y_test_pred), recall_score(y_test, y_test_pred))
+        print('... Confusion Matrix \n', confusion_matrix(y_test, y_test_pred))
 
-    print('... Full set F1-score ', f1_score(y_full, y_full_pred))
-    print('... Precision and Recall ', precision_score(y_full, y_full_pred), recall_score(y_full, y_full_pred))
-    print('... Confusion Matrix ', confusion_matrix(y_full, y_full_pred))
+        print('... Full set F1-score ', f1_score(y_full, y_full_pred))
+        print('... Precision and Recall ', precision_score(y_full, y_full_pred), recall_score(y_full, y_full_pred))
+        print('... Confusion Matrix \n', confusion_matrix(y_full, y_full_pred))
 
     roc = {'metalearners': name_model,
            'pr_test': precision_score(y_test, y_test_pred),
@@ -269,6 +296,7 @@ def classification_models(y_train, y_test, X_train, X_test, name_model):
            'f1_full': f1_score(y_full, y_full_pred)}
     warnings.filterwarnings("default")
     return roc, y_test_pred, y_full_pred, y_full_prob
+
 
 def nn_classifier(y_train, X_train, X_test, X_full):
     """
@@ -337,7 +365,7 @@ def nn_classifier(y_train, X_train, X_test, X_full):
     batcher = Batcher(n_items, bat_size)
     X_test = X_test.values
     X_train = X_train.values
-    print('Starting training')
+    # print('Starting training')
 
     # Divide by class
     df_class_0 = pd.DataFrame(X_train[y_train == 0])
@@ -358,15 +386,18 @@ def nn_classifier(y_train, X_train, X_test, X_full):
             Y = T.Tensor(y_train2[curr_bat])
             optimizer.zero_grad()
             oupt = net(X)
+            oupt = oupt.reshape(oupt.shape[0])
+            # print(oupt.shape, Y.shape)
             loss_obj = loss_func(oupt, Y)
             loss_obj.backward()
             optimizer.step()
-    print('Training complete \n')
+    # print('Training complete \n')
     net = net.eval()  # set eval mode
 
     y_pred = akkuracy(net, X_test)
     yfull = akkuracy(net, X_full)
     return y_pred, yfull
+
 
 def data_norm(data1):
     """
@@ -391,6 +422,7 @@ def data_norm(data1):
     data1o.columns = data1.columns
     return data1o
 
+
 class learner_BART():
     def __init__(self, X_train, X_test, y_train, y_test):
         super(learner_BART, self).__init__()
@@ -398,6 +430,7 @@ class learner_BART():
         self.X_test = X_test
         self.y_train = y_train
         self.y_test = y_test
+        self.model = None
         print('Running BART')
 
     def Find_Optimal_Cutoff(self, target, predicted):
@@ -433,19 +466,40 @@ class learner_BART():
 
         print('... Testing set: F1 - ', f1_score(self.y_test, y_test_pred01))
         print('...... confusion matrix: ', confusion_matrix(self.y_test, y_test_pred01).ravel())
+        assert isinstance(model, object)
+        self.model = model 
 
-        return model
 
-    def cate(self):
+    def cate(self, TreatmentColumns, boostrap=False, b=30):
         # TODO: implement cate
-        print('implement')
+        print('CATE In progress')
+        X = np.concatenate([self.X_train, self.X_test], axis=0)
+        # y = np.concatenate([self.y_train, self.y_test], axis=0)
+        y_pred_full = self.model.predict(X)
+        bart_cate = np.zeros(len(TreatmentColumns))
 
-        fpr, tpr, _ = roc_curve(y_test, predp1)
-        auc = roc_auc_score(y_test, predp1)
-        roc = {'learners': 'DA',
-               'fpr': fpr,
-               'tpr': tpr,
-               'auc': auc}
+        for t, treat in enumerate(TreatmentColumns):
+            print('Col', i)
+            Xi = X.copy()
+            Xi[:, treat] = 1 - Xi[:, treat]
+            y_pred_fulli = self.model.predict(Xi)
+            Ot1 = y_pred_full[X[:, treat] == 1]
+            Ot0 = y_pred_full[X[:, treat] == 0]
+            It1 = y_pred_fulli[Xi[:, treat] == 1]
+            It0 = y_pred_fulli[Xi[:, treat] == 0]
+            print(It1, It0, len(Y_pred_fulli))
+            print(Ot1, Ot0, len(y_pred_full))
+            print('treat filter', X[0:1, treat])
+            print('treat filter', Xi[0:1, treat])
+            # assert len(It1) + len(It0) == X_pred_fulli.shape[0], 'CATE: Wrong Dimensions'
+            # assert len(Ot1) + len(Ot0) == len(y_pred_full), 'CATE: Wrong Dimensions'
+            bart_cate[t] = np.concatenate([Ot1, It1], 0).mean() - np.concatenate([Ot0, It0], 0).mean()
+        return bart_cate
+
+    def boostrap_cate(self, dif, b=30):
+        # TODO: implemente bootstrap cate
+        print('TODO',b)
+
 
 class learner_deconfounder_algorithm():
     def __init__(self, X_train, X_test, y_train, y_test, k=5):
