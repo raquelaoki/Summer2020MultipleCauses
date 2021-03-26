@@ -4,12 +4,11 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from torch import optim
+from torch import optim, Tensor
 import torch.distributions
 import torch.nn.functional as F
 from torch.distributions import bernoulli, normal
 from torch.utils.data import Dataset, DataLoader, TensorDataset
-
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
@@ -18,31 +17,35 @@ from tqdm import tqdm
 
 print('Available devices ', torch.cuda.device_count())
 print('Current cuda device ', torch.cuda.current_device())
+cuda = torch.device('cuda')
 
 
 class Data(object):
     # replications were over the treatments
-    def __init__(self, X_train, X_test, y_train, y_test, treatments_columns, data_path, binfeats=None, contfeats=None):
+    def __init__(self, X_train, X_test, y_train, y_test, treatments_columns, batch, binfeats=None, contfeats=None):
         self.treatments_columns = treatments_columns
-        self.data_path = data_path
+        # self.data_path = data_path
+        self.batch = batch
         self.X_train = X_train
         self.y_train = y_train
         self.X_test = X_test
         self.y_test = y_test
-        self.binfeats = list(range(self.X.shape[1])) if binfeats is None else binfeats  # which features are continuous
+        self.binfeats = list(range(self.X_train.shape[1])) if binfeats is None else binfeats  # which features are continuous
         self.contfeats = [] if contfeats is None else contfeats  # which features are continuous
         # TODO: update continuous features for goPDX
 
     def get_train_valid_test(self):
         for col in self.treatments_columns:
-            dataset_train = TensorDataset(Tensor(np.delete(self.X_train, col, 1)), Tensor(self.X_train[:, col]),
-                                          Tensor(self.y_train))
-            dataset_test = TensorDataset(Tensor(np.delete(self.X_test, col, 1)), Tensor(self.X_test[:, col]),
-                                         Tensor(self.y_test))
+            dataset_train = TensorDataset(Tensor(np.delete(self.X_train, col, 1)),
+                                          Tensor(self.X_train[:, col].reshape(self.X_train.shape[0], 1)),
+                                          Tensor(self.y_train.reshape(self.X_train.shape[0], 1)))
+            dataset_test = TensorDataset(Tensor(np.delete(self.X_test, col, 1)),
+                                         Tensor(self.X_test[:, col].reshape(self.X_test.shape[0], 1)),
+                                         Tensor(self.y_test.reshape(self.X_test.shape[0], 1)))
 
             ''' Required: Create DataLoader for training the models '''
-            loader_train = DataLoader(dataset_train, shuffle=True, batch_size=params["batch_size"])
-            loader_test = DataLoader(dataset_test, shuffle=False, batch_size=len(rows_test))
+            loader_train = DataLoader(dataset_train, shuffle=True, batch_size=self.batch)
+            loader_test = DataLoader(dataset_test, shuffle=False, batch_size=len(self.y_test))
 
             yield loader_train, loader_test, self.contfeats, self.binfeats
 
@@ -50,11 +53,11 @@ class Data(object):
 def get_y0_y1(p_y_zt_dist, q_y_xt_dist, q_z_tyx_dist, x_train, t_train, L=1):
     y_infer = q_y_xt_dist(x_train.float(), t_train.float())
     # use inferred y
-    xy = torch.cat((x_train.float(), y_infer.mean), 1)  # TODO take mean?
+    xy = torch.cat((x_train.float(), y_infer.mean), 1)
     z_infer = q_z_tyx_dist(xy=xy, t=t_train.float())
     # Manually input zeros and ones
-    y0 = p_y_zt_dist(z_infer.mean, torch.zeros(z_infer.mean.shape).cuda()).mean  # TODO take mean?
-    y1 = p_y_zt_dist(z_infer.mean, torch.ones(z_infer.mean.shape).cuda()).mean  # TODO take mean?
+    y0 = p_y_zt_dist(z_infer.mean, torch.zeros(z_infer.mean.shape).cuda()).mean
+    y1 = p_y_zt_dist(z_infer.mean, torch.ones(z_infer.mean.shape).cuda()).mean
 
     return y0.cpu().detach().numpy(), y1.cpu().detach().numpy()
 
@@ -65,10 +68,16 @@ def init_qz(qz, pz, data_loader):
     - with standard torch init of weights the gradients tend to explode after first update step
     """
     batch = next(iter(data_loader))
+    for j in range(len(batch)):
+        batch[j] = batch[j].cuda()
     optimizer = optim.Adam(qz.parameters(), lr=0.001)
-
+    #batch[2] = batch[2].reshape(batch[2].shape[0], 1)
     for i in range(50):
+        #print('Here')
+        #print(batch[0].shape, batch[2].shape)
         xy = torch.cat((batch[0], batch[2]), 1)
+        print('Here')
+        print(xy.shape,batch[1].shape)
         z_infer = qz(xy=xy, t=batch[1])
         # KL(q_z|p_z) mean approx, to be minimized
         # KLqp = (z_infer.log_prob(z_infer.mean) - pz.log_prob(z_infer.mean)).sum(1)
@@ -263,10 +272,11 @@ class q_z_tyx(nn.Module):
     def forward(self, xy, t):
         # Shared layers with separated output layers
         # print('before first linear z_infer')
-        # print(xy)
+
+        print('here first', xy.shape)
         x = F.elu(self.input(xy))
         # print('first linear z_infer')
-        # print(x)
+        print('here second', x.shape)
         for i in range(self.nh):
             x = F.elu(self.hidden[i](x))
 
@@ -282,12 +292,12 @@ class q_z_tyx(nn.Module):
 
 class CEVAE():
     def __init__(self, X_train, X_test, y_train, y_test,
-                 treatments_columns, data_path, z_dim=20,
+                 treatments_columns, z_dim=20,
                  h_dim=64, epochs=100, batch=500, lr=0.001,
                  decay=0.001, print_every=100):
         super(CEVAE, self).__init__()
         self.treatments_columns = treatments_columns
-        self.dataset = Data(X_train, X_test, y_train, y_test, treatments_columns, data_path)
+        self.dataset = Data(X_train, X_test, y_train, y_test, treatments_columns, batch)
         self.z_dim = z_dim
         self.h_dim = h_dim
         self.epochs = epochs
@@ -296,7 +306,7 @@ class CEVAE():
         self.decay = decay
         self.print_every = print_every
         self.scaler = MinMaxScaler(feature_range=(0, 1))
-        # TODO: Here
+
 
     def fit_all(self):
         cevae_cate = np.zeros(len(self.treatments_columns))
@@ -320,7 +330,8 @@ class CEVAE():
             p_y_zt_dist = p_y_zt(dim_in=self.z_dim, nh=3, dim_h=self.h_dim, dim_out=1).cuda()
             q_t_x_dist = q_t_x(dim_in=x_dim, nh=1, dim_h=self.h_dim, dim_out=1).cuda()
             # t is not feed into network, therefore not increasing input size (y is fed).
-            q_y_xt_dist = q_y_xt(dim_in=x_dim, nh=3, dim_h=args.h_dim, dim_out=1).cuda()
+            q_y_xt_dist = q_y_xt(dim_in=x_dim, nh=3, dim_h=self.h_dim, dim_out=1).cuda()
+            #print('MY DIMENSION IS',len(self.dataset.binfeats) + len(self.dataset.contfeats) )
             q_z_tyx_dist = q_z_tyx(dim_in=len(self.dataset.binfeats) + len(self.dataset.contfeats) + 1, nh=3,
                                    dim_h=self.h_dim,
                                    dim_out=self.z_dim).cuda()  # remove an 1 from dim_in
@@ -338,6 +349,11 @@ class CEVAE():
                 # batch: X, t, y
                 for i, batch in enumerate(tqdm(train_loader)):
                     # inferred distribution over z
+                    for j in range(len(batch)):
+                        batch[j] = batch[j].cuda()
+
+
+                    #batch[2] = batch[2].reshape(batch[2].shape[0], 1)
                     xy = torch.cat((batch[0], batch[2]), 1)
                     z_infer = q_z_tyx_dist(xy=xy, t=batch[1])
                     # use a single sample to approximate expectation in lowerbound
@@ -402,9 +418,8 @@ class CEVAE():
             # returns fit info only for testing set
             return y0[:, 0].mean(), y1[:, 0].mean(), (y1[:, 0] - y0[:, 0]).mean(), y_pred, batch[1]
         except ValueError:
-            # TODO: update except below
-            y_pred = np.zeros(len(yte))
+            batch = next(iter(test_loader))
+            y_pred = np.zeros(len(batch[1]))
             y_pred[:] = np.nan
             y_pred = y_pred.reshape(-1, 1)
-            print('ERROR:', tcol)
-            return 0.0, 0.0, 0.0, y_pred, np.squeeze(np.asarray(yte))
+            return 0.0, 0.0, 0.0, y_pred, batch[1]

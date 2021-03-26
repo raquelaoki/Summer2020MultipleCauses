@@ -18,6 +18,8 @@ import eval as evaluation
 data_preprocessing = False
 run_learners = True
 
+# TODO: clone parkca and load - similar to bart
+# NEW bart file is there
 
 def main(config_path, DataPreprocessing=False, RunLearners=True):
     path = '/content/'
@@ -60,12 +62,13 @@ def main(config_path, DataPreprocessing=False, RunLearners=True):
         X = np.concatenate([x_clinical, x_snps], axis=1)
         print(X.shape)
 
-        X = preprocessing.StandardScaler().fit_transform(X)
+        X = preprocessing.MinMaxScaler().fit_transform(X)
         level1data = parkca.learners([params['learners']], X, y, x_colnames)
         print(level1data.head())
+        np.save('level1data', level1data)
         print('Learners: Done!')
-
     else:
+
         print('Loading option not implemented for this option')
         sys.exit()
 
