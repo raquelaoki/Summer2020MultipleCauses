@@ -460,7 +460,7 @@ class learner_BART():
         thhold = self.Find_Optimal_Cutoff(self.y_train, y_train_pred)
         y_train_pred01 = [0 if item < thhold else 1 for item in y_train_pred]
         y_test_pred01 = [0 if item < thhold else 1 for item in y_test_pred]
-        print('... Leaner Evaluation:')
+        print('... Evaluation:')
         print('... Training set: F1 - ', f1_score(self.y_train, y_train_pred01))
         print('...... confusion matrix: ', confusion_matrix(self.y_train, y_train_pred01).ravel())
 
@@ -718,7 +718,7 @@ class learner_deconfounder_algorithm():
             y_train_pred = modelcv.predict(X_train)
 
             y_test_predp1 = [i[1] for i in y_test_predp]
-            print('... Leaner Evaluation:')
+            print('... Evaluation:')
 
             print('... Training set: F1 - ', f1_score(self.y_train, y_train_pred),
                   sum(y_train_pred), sum(self.y_train))

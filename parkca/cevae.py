@@ -1,4 +1,6 @@
 # Reference https://github.com/kim-hyunsu/CEVAE-pyro/blob/master/model/vae.py
+# https://github.com/AMLab-Amsterdam/CEVAE/blob/master/cevae_ihdp.py
+# https://github.com/rik-helwegen/CEVAE_pytorch/blob/master/main.py
 import sys
 import numpy as np
 import pandas as pd
@@ -14,11 +16,15 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 from collections import defaultdict
 from tqdm import tqdm
+from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score
+from sklearn.metrics import roc_curve, roc_auc_score
 
 print('Available devices ', torch.cuda.device_count())
 print('Current cuda device ', torch.cuda.current_device())
 cuda = torch.device('cuda')
 
+
+# TODO: Test with IHDP dataset to make sure this is working
 
 class Data(object):
     # replications were over the treatments
@@ -30,7 +36,9 @@ class Data(object):
         self.y_train = y_train
         self.X_test = X_test
         self.y_test = y_test
-        self.binfeats = list(range(self.X_train.shape[1])) if binfeats is None else binfeats  # which features are continuous
+        self.binfeats = range(
+            self.X_train.shape[1] - 1) if binfeats is None else binfeats  # which features are continuous
+        # print('From data initialization', self.binfeats)
         self.contfeats = [] if contfeats is None else contfeats  # which features are continuous
         # TODO: update continuous features for goPDX
 
@@ -71,26 +79,11 @@ def init_qz(qz, pz, data_loader):
     for j in range(len(batch)):
         batch[j] = batch[j].cuda()
     optimizer = optim.Adam(qz.parameters(), lr=0.001)
-    #batch[2] = batch[2].reshape(batch[2].shape[0], 1)
     for i in range(50):
-        #print('Here')
-        #print(batch[0].shape, batch[2].shape)
         xy = torch.cat((batch[0], batch[2]), 1)
-        print('Here')
-        print(xy.shape,batch[1].shape)
         z_infer = qz(xy=xy, t=batch[1])
-        # KL(q_z|p_z) mean approx, to be minimized
-        # KLqp = (z_infer.log_prob(z_infer.mean) - pz.log_prob(z_infer.mean)).sum(1)
-        # Analytic KL
         KLqp = (-torch.log(z_infer.stddev) + 1 / 2 * (z_infer.variance + z_infer.mean ** 2 - 1)).sum(1)
-
-        objective = KLqp
         optimizer.zero_grad()
-        objective.backward()
-        optimizer.step()
-
-        if KLqp != KLqp:
-            raise ValueError('KL(pz,qz) contains NaN during init')
     return qz
 
 
@@ -120,14 +113,14 @@ class p_x_z(nn.Module):
             z = F.elu(self.hidden[i](z))
         # for binary outputs:
         x_bin_p = torch.sigmoid(self.output_bin(z))
-        x_bin = bernoulli.Bernoulli(x_bin_p)
+        x_bin = bernoulli.Bernoulli(x_bin_p, validate_args=False)
         # for continuous outputs
         mu, sigma = self.output_con_mu(z), self.softplus(self.output_con_sigma(z))
         x_con = normal.Normal(mu, sigma)
 
         if (z != z).all():
             raise ValueError('p(x|z) forward contains NaN')
-
+        # print('Values here:', x_bin, x_con)
         return x_bin, x_con
 
 
@@ -140,19 +133,21 @@ class p_t_z(nn.Module):
         self.dim_out = dim_out
 
         # dim_in is dim of latent space z
+        #print('Chekcin:', dim_in)
         self.input = nn.Linear(dim_in, dim_h)
         # loop through dimensions to create fully con. hidden layers, add params with ModuleList
         self.hidden = nn.ModuleList([nn.Linear(dim_h, dim_h) for _ in range(nh)])
         self.output = nn.Linear(dim_h, dim_out)
 
     def forward(self, x):
+        #print('Checking:',x.shape)
         x = F.elu(self.input(x))
         for i in range(self.nh):
             x = F.elu(self.hidden[i](x))
         # for binary outputs:
         out_p = torch.sigmoid(self.output(x))
 
-        out = bernoulli.Bernoulli(out_p)
+        out = bernoulli.Bernoulli(out_p, validate_args=False)
         return out
 
 
@@ -201,7 +196,7 @@ class q_t_x(nn.Module):
         # save required vars
         self.nh = nh
         self.dim_out = dim_out
-
+        #print('dim_in', dim_in)
         # dim_in is dim of data x
         self.input = nn.Linear(dim_in, dim_h)
         # loop through dimensions to create fully con. hidden layers, add params with ModuleList
@@ -209,12 +204,13 @@ class q_t_x(nn.Module):
         self.output = nn.Linear(dim_h, dim_out)
 
     def forward(self, x):
+        #print('cehcking:', x.shape)
         x = F.elu(self.input(x))
         for i in range(self.nh):
             x = F.elu(self.hidden[i](x))
         # for binary outputs:
         out_p = torch.sigmoid(self.output(x))
-        out = bernoulli.Bernoulli(out_p)
+        out = bernoulli.Bernoulli(out_p, validate_args=False)
 
         return out
 
@@ -258,7 +254,7 @@ class q_z_tyx(nn.Module):
         self.nh = nh
 
         # Shared layers with separated output layers
-
+        #print('CHecking:', dim_in)
         self.input = nn.Linear(dim_in, dim_h)
         # loop through dimensions to create fully con. hidden layers, add params with ModuleList
         self.hidden = nn.ModuleList([nn.Linear(dim_h, dim_h) for _ in range(nh)])
@@ -271,12 +267,8 @@ class q_z_tyx(nn.Module):
 
     def forward(self, xy, t):
         # Shared layers with separated output layers
-        # print('before first linear z_infer')
-
-        print('here first', xy.shape)
+        #print('Checking2:',xy.shape)
         x = F.elu(self.input(xy))
-        # print('first linear z_infer')
-        print('here second', x.shape)
         for i in range(self.nh):
             x = F.elu(self.hidden[i](x))
 
@@ -286,18 +278,23 @@ class q_z_tyx(nn.Module):
         sigma_t1 = self.softplus(self.sigma_t1(x))
 
         # Set mu and sigma according to t
-        z = normal.Normal((1 - t) * mu_t0 + t * mu_t1, (1 - t) * sigma_t0 + t * sigma_t1)
+        mean = (1 - t) * mu_t0 + t * mu_t1
+        var = (1 - t) * sigma_t0 + t * sigma_t1
+
+        z = normal.Normal(mean, var)
+
         return z
 
 
 class CEVAE():
     def __init__(self, X_train, X_test, y_train, y_test,
                  treatments_columns, z_dim=20,
-                 h_dim=64, epochs=100, batch=500, lr=0.001,
-                 decay=0.001, print_every=100):
+                 h_dim=64, epochs=100, batch=20, lr=0.001,
+                 decay=0.001, print_every=25,
+                 binfeats=None, contfeats=None):
         super(CEVAE, self).__init__()
         self.treatments_columns = treatments_columns
-        self.dataset = Data(X_train, X_test, y_train, y_test, treatments_columns, batch)
+        self.dataset = Data(X_train, X_test, y_train, y_test, treatments_columns, batch, binfeats, contfeats)
         self.z_dim = z_dim
         self.h_dim = h_dim
         self.epochs = epochs
@@ -307,119 +304,142 @@ class CEVAE():
         self.print_every = print_every
         self.scaler = MinMaxScaler(feature_range=(0, 1))
 
+    def Find_Optimal_Cutoff(self, target, predicted):
+        """ Find the optimal probability cutoff point for a classification model related to event rate
+        Parameters
+        ----------
+        target : Matrix with dependent or target data, where rows are observations
+
+        predicted : Matrix with predicted data, where rows are observations
+
+        Returns
+        -------
+        list type, with optimal cutoff value
+        https://stackoverflow.com/questions/28719067/roc-curve-and-cut-off-point-python
+        """
+        fpr, tpr, threshold = roc_curve(target, predicted)
+        i = np.arange(len(tpr))
+        roc = pd.DataFrame({'tf': pd.Series(tpr - (1 - fpr), index=i), 'threshold': pd.Series(threshold, index=i)})
+        roc_t = roc.iloc[(roc.tf - 0).abs().argsort()[:1]]
+        return list(roc_t['threshold'])
 
     def fit_all(self):
         cevae_cate = np.zeros(len(self.treatments_columns))
+        f1, fpr, tpr, auc = [], [], [], []
         for i, (train_loader, test_loader, contfeats, binfeats) in enumerate(self.dataset.get_train_valid_test()):
             # train contains: X, t, y
+            print('Treatment:', i)
             y0, y1, cevae_cate[i], y_test_pred, y_test = self.fit(train_loader, test_loader)
-        return cevae_cate
+            # print(y_test_pred, y_test )
+            thhold = self.Find_Optimal_Cutoff(y_test, y_test_pred)
+            y_test_pred01 = [0 if item < thhold else 1 for item in y_test_pred]
+            # vprint('y0 and y1',y0, y1,' predictions', y_test_pred[0:10], 'real value', y_test)
+            f1.append(f1_score(y_test, y_test_pred01))
+            fpri, tpri, _ = roc_curve(y_test, y_test_pred)
+            auc.append(roc_auc_score(y_test, y_test_pred01))
+            fpr.append(fpri)
+            tpr.append(tpri)
+
+        print('... Evaluation (average):')
+        print('... Testing set: F1 - ', np.mean(f1))
+        # roc = {'learners': 'CEVAE',
+        #       'fpr': np.mean(fpr),
+        #       'tpr': np.mean(tpr),
+        #       'auc': np.mean(auc)}
+        return cevae_cate  # , roc
+        # return cevae_cate
 
     def fit(self, train_loader, test_loader):
-        # read out data
-        # (xtr, ttr, ytr) = train
-        # (xva, tva, yva) = valid  # not being used
-        # (xte, tte, yte) = test
+        # try:
+        # init networks (overwritten per replication)
+        x_dim = len(self.dataset.binfeats) + len(self.dataset.contfeats)
+        # print('From initialization:', self.z_dim, len(self.dataset.binfeats))
+        p_x_z_dist = p_x_z(dim_in=self.z_dim, nh=3, dim_h=self.h_dim, dim_out_bin=len(self.dataset.binfeats),
+                           dim_out_con=len(self.dataset.contfeats)).cuda()
+        p_t_z_dist = p_t_z(dim_in=self.z_dim, nh=1, dim_h=self.h_dim, dim_out=1).cuda()
+        p_y_zt_dist = p_y_zt(dim_in=self.z_dim, nh=3, dim_h=self.h_dim, dim_out=1).cuda()
+        q_t_x_dist = q_t_x(dim_in=x_dim-1, nh=1, dim_h=self.h_dim, dim_out=1).cuda()
+        # t is not feed into network, therefore not increasing input size (y is fed).
+        q_y_xt_dist = q_y_xt(dim_in=x_dim-1, nh=3, dim_h=self.h_dim, dim_out=1).cuda()
+        # print('MY DIMENSION IS',len(self.dataset.binfeats) + len(self.dataset.contfeats) )
+        q_z_tyx_dist = q_z_tyx(dim_in=len(self.dataset.binfeats) + len(self.dataset.contfeats) , nh=3,
+                               dim_h=self.h_dim,
+                               dim_out=self.z_dim).cuda()  # remove an 1 from dim_in
+        p_z_dist = normal.Normal(torch.zeros(self.z_dim).cuda(), torch.ones(self.z_dim).cuda())
+        # Create optimizer
+        model = list(p_x_z_dist.parameters()) + list(p_t_z_dist.parameters()) + \
+                list(p_y_zt_dist.parameters()) + list(q_t_x_dist.parameters()) + \
+                list(q_y_xt_dist.parameters()) + list(q_z_tyx_dist.parameters())
+        # Adam is used, like original implementation, in paper Adamax is suggested
+        optimizer = optim.Adam(model, lr=self.lr, weight_decay=self.decay)
+        # init q_z inference
+        q_z_tyx_dist = init_qz(q_z_tyx_dist, p_z_dist, train_loader)
+        loss = defaultdict(list)
+        for epoch in range(self.epochs):
+            # batch: X, t, y
+            for i, batch in enumerate(train_loader):
+                # inferred distribution over z
+                for j in range(len(batch)):
+                    batch[j] = batch[j].cuda()
+                xy = torch.cat((batch[0], batch[2]), 1)
+                z_infer = q_z_tyx_dist(xy=xy, t=batch[1])
+                # use a single sample to approximate expectation in lowerbound
+                z_infer_sample = z_infer.sample()
 
-        try:
-            # init networks (overwritten per replication)
-            x_dim = len(self.dataset.binfeats) + len(self.dataset.contfeats)
-            p_x_z_dist = p_x_z(dim_in=self.z_dim, nh=3, dim_h=self.h_dim, dim_out_bin=len(self.dataset.binfeats),
-                               dim_out_con=len(self.dataset.contfeats)).cuda()
-            p_t_z_dist = p_t_z(dim_in=self.z_dim, nh=1, dim_h=self.h_dim, dim_out=1).cuda()
-            p_y_zt_dist = p_y_zt(dim_in=self.z_dim, nh=3, dim_h=self.h_dim, dim_out=1).cuda()
-            q_t_x_dist = q_t_x(dim_in=x_dim, nh=1, dim_h=self.h_dim, dim_out=1).cuda()
-            # t is not feed into network, therefore not increasing input size (y is fed).
-            q_y_xt_dist = q_y_xt(dim_in=x_dim, nh=3, dim_h=self.h_dim, dim_out=1).cuda()
-            #print('MY DIMENSION IS',len(self.dataset.binfeats) + len(self.dataset.contfeats) )
-            q_z_tyx_dist = q_z_tyx(dim_in=len(self.dataset.binfeats) + len(self.dataset.contfeats) + 1, nh=3,
-                                   dim_h=self.h_dim,
-                                   dim_out=self.z_dim).cuda()  # remove an 1 from dim_in
-            p_z_dist = normal.Normal(torch.zeros(self.z_dim).cuda(), torch.ones(self.z_dim).cuda())
-            # Create optimizer
-            model = list(p_x_z_dist.parameters()) + list(p_t_z_dist.parameters()) + \
-                    list(p_y_zt_dist.parameters()) + list(q_t_x_dist.parameters()) + \
-                    list(q_y_xt_dist.parameters()) + list(q_z_tyx_dist.parameters())
-            # Adam is used, like original implementation, in paper Adamax is suggested
-            optimizer = optim.Adam(model, lr=self.lr, weight_decay=self.decay)
-            # init q_z inference
-            q_z_tyx_dist = init_qz(q_z_tyx_dist, p_z_dist, train_loader)
-            loss = defaultdict(list)
-            for epoch in range(self.epochs):
-                # batch: X, t, y
-                for i, batch in enumerate(tqdm(train_loader)):
-                    # inferred distribution over z
-                    for j in range(len(batch)):
-                        batch[j] = batch[j].cuda()
+                # RECONSTRUCTION LOSS
+                # p(x|z)
+                x_bin, x_con = p_x_z_dist(z_infer_sample)
+                # print('Before l1 (202, 14): ', batch[0][:, :len(self.dataset.binfeats)].shape, batch[0].shape)
+                l1 = x_bin.log_prob(batch[0][:, :len(self.dataset.binfeats)]).sum(1)
+                loss['Reconstr_x_bin'].append(l1.sum().cpu().detach().float())
+                # l2 = x_con.log_prob(x_train[:, -len(contfeats):]).sum(1)
+                # loss['Reconstr_x_con'].append(l2.sum().cpu().detach().float())
+                # p(t|z)
+                t = p_t_z_dist(z_infer_sample)
+                l3 = t.log_prob(batch[1]).squeeze()
+                loss['Reconstr_t'].append(l3.sum().cpu().detach().float())
+                # p(y|t,z)
+                # for training use t_train, in out-of-sample prediction this becomes t_infer
+                y = p_y_zt_dist(z_infer_sample, batch[1])
+                l4 = y.log_prob(batch[2]).squeeze()
+                loss['Reconstr_y'].append(l4.sum().cpu().detach().float())
 
+                # REGULARIZATION LOSS
+                # p(z) - q(z|x,t,y)
+                # approximate KL
+                l5 = (p_z_dist.log_prob(z_infer_sample) - z_infer.log_prob(z_infer_sample)).sum(1)
+                # Analytic KL (seems to make overall performance less stable)
+                # l5 = (-torch.log(z_infer.stddev) + 1/2*(z_infer.variance + z_infer.mean**2 - 1)).sum(1)
+                loss['Regularization'].append(l5.sum().cpu().detach().float())
 
-                    #batch[2] = batch[2].reshape(batch[2].shape[0], 1)
-                    xy = torch.cat((batch[0], batch[2]), 1)
-                    z_infer = q_z_tyx_dist(xy=xy, t=batch[1])
-                    # use a single sample to approximate expectation in lowerbound
-                    z_infer_sample = z_infer.sample()
+                # AUXILIARY LOSS
+                # q(t|x)
+                t_infer = q_t_x_dist(batch[0])
+                l6 = t_infer.log_prob(batch[1]).squeeze()
+                loss['Auxiliary_t'].append(l6.sum().cpu().detach().float())
+                # q(y|x,t)
+                y_infer = q_y_xt_dist(batch[0], batch[1])
+                l7 = y_infer.log_prob(batch[2]).squeeze()
+                loss['Auxiliary_y'].append(l7.sum().cpu().detach().float())
 
-                    # RECONSTRUCTION LOSS
-                    # p(x|z)
-                    x_bin, x_con = p_x_z_dist(z_infer_sample)
-                    l1 = x_bin.log_prob(atch[0][:, :len(self.dataset.binfeats)]).sum(1)
-                    loss['Reconstr_x_bin'].append(l1.sum().cpu().detach().float())
-                    # l2 = x_con.log_prob(x_train[:, -len(contfeats):]).sum(1)
-                    # loss['Reconstr_x_con'].append(l2.sum().cpu().detach().float())
-                    # p(t|z)
-                    t = p_t_z_dist(z_infer_sample)
-                    l3 = t.log_prob(batch[1]).squeeze()
-                    loss['Reconstr_t'].append(l3.sum().cpu().detach().float())
-                    # p(y|t,z)
-                    # for training use t_train, in out-of-sample prediction this becomes t_infer
-                    y = p_y_zt_dist(z_infer_sample, batch[1])
-                    l4 = y.log_prob(y_train).squeeze()
-                    loss['Reconstr_y'].append(l4.sum().cpu().detach().float())
+                # Total objective
+                # inner sum to calculate loss per item, torch.mean over batch
+                loss_mean = torch.mean(l1 + l3 + l4 + l5 + l6 + l7)  # + l2
+                loss['Total'].append(loss_mean.cpu().detach().numpy())
+                objective = -loss_mean
 
-                    # REGULARIZATION LOSS
-                    # p(z) - q(z|x,t,y)
-                    # approximate KL
-                    l5 = (p_z_dist.log_prob(z_infer_sample) - z_infer.log_prob(z_infer_sample)).sum(1)
-                    # Analytic KL (seems to make overall performance less stable)
-                    # l5 = (-torch.log(z_infer.stddev) + 1/2*(z_infer.variance + z_infer.mean**2 - 1)).sum(1)
-                    loss['Regularization'].append(l5.sum().cpu().detach().float())
+                optimizer.zero_grad()
+                # Calculate gradients
+                objective.backward()
+                # Update step
+                optimizer.step()
 
-                    # AUXILIARY LOSS
-                    # q(t|x)
-                    t_infer = q_t_x_dist(batch[0])
-                    l6 = t_infer.log_prob(batch[1]).squeeze()
-                    loss['Auxiliary_t'].append(l6.sum().cpu().detach().float())
-                    # q(y|x,t)
-                    y_infer = q_y_xt_dist(batch[0], batch[1])
-                    l7 = y_infer.log_prob(batch[2]).squeeze()
-                    loss['Auxiliary_y'].append(l7.sum().cpu().detach().float())
-
-                    # Total objective
-                    # inner sum to calculate loss per item, torch.mean over batch
-                    loss_mean = torch.mean(l1 + l3 + l4 + l5 + l6 + l7)  # + l2
-                    loss['Total'].append(loss_mean.cpu().detach().numpy())
-                    objective = -loss_mean
-
-                    optimizer.zero_grad()
-                    # Calculate gradients
-                    objective.backward()
-                    # Update step
-                    optimizer.step()
-
-                if epoch % self.print_every == 0:
-                    print('Epoch - ', epoch, ' Loss: ', loss_mean)
-                    # TODO: add eval for validation and training set?
-            # Done Training!
-            batch = next(iter(test_loader))
-            y0, y1 = get_y0_y1(p_y_zt_dist, q_y_xt_dist, q_z_tyx_dist, batch[0].cuda(), batch[1].cuda())
-            y01_pred = q_y_xt_dist(batch[0].cuda(), batch[1].cuda())
-            y_pred = self.scaler.fit_transform(y01_pred.mean.cpu().detach().numpy())
-            # y0, y1 = y0 * ys + ym, y1 * ys + ym
-            # returns fit info only for testing set
-            return y0[:, 0].mean(), y1[:, 0].mean(), (y1[:, 0] - y0[:, 0]).mean(), y_pred, batch[1]
-        except ValueError:
-            batch = next(iter(test_loader))
-            y_pred = np.zeros(len(batch[1]))
-            y_pred[:] = np.nan
-            y_pred = y_pred.reshape(-1, 1)
-            return 0.0, 0.0, 0.0, y_pred, batch[1]
+            if epoch % self.print_every == 0:
+                print('Epoch - ', epoch, ' Loss: ', loss_mean)
+                # TODO: add eval for validation and training set?
+        # Done Training!
+        batch = next(iter(test_loader))
+        y0, y1 = get_y0_y1(p_y_zt_dist, q_y_xt_dist, q_z_tyx_dist, batch[0].cuda(), batch[1].cuda())
+        y01_pred = q_y_xt_dist(batch[0].cuda(), batch[1].cuda())
+        y_pred = self.scaler.fit_transform(y01_pred.mean.cpu().detach().numpy())
+        return y0[:, 0].mean(), y1[:, 0].mean(), (y1[:, 0] - y0[:, 0]).mean(), y_pred, batch[2]
