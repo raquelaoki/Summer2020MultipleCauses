@@ -63,7 +63,7 @@ def main(config_path, DataPreprocessing=False, RunLearners=True):
         print(X.shape)
 
         X = preprocessing.MinMaxScaler().fit_transform(X)
-        level1data = parkca.learners([params['learners']], X, y, x_colnames)
+        level1data = parkca.learners([params['learners']], X, y, x_colnames, x_clinical_names)
         print(level1data.head())
         np.save('level1data', level1data)
         print('Learners: Done!')

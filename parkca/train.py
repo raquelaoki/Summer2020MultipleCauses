@@ -36,6 +36,8 @@ from torch.distributions import bernoulli, normal
 tf.disable_v2_behavior()
 tf.enable_eager_execution()
 warnings.simplefilter("ignore")
+# sys.path.insert(0, '/content/')
+from cevae import CEVAE as cevae
 
 
 # import datapreprocessing as dp
@@ -50,7 +52,7 @@ warnings.simplefilter("ignore")
 # from pywsl.utils.comcalc import bin_clf_err
 
 
-def learners(LearnersList, X, y, colnamesX, id='', Z=None, colnamesZ=None, path_output=None):
+def learners(LearnersList, X, y, colnamesX, id='', Z=None, colnamesZ=None, path_output=None, cevaeMax=500):
     """
     input:
         path_output: where to save the files
@@ -91,10 +93,48 @@ def learners(LearnersList, X, y, colnamesX, id='', Z=None, colnamesZ=None, path_
         # predictions = model.predict(x_snps)  # [:,0:1000] Make predictions on the train set
         # print(predictions[0])
         print('Done!')
+    if 'CEVAE' in LearnersList:
+        print('\n\n Learner: CEVAE')
+        nclinical = len(colnamesZ)
+        if cevaeMax < len(range(nclinical, X_train.shape[0])):
+            print('... Working with dataset partitions')
+            X_train_cevae_c, X_test_cevae_c = X_train[:, 0:nclinical], X_test[:, 0:nclinical]
+            X_train_cevae_s = X_train[:, nclinical:X_train.shape[1]]
+            X_test_cevae_s = X_test[:, nclinical:X_train.shape[1]]
+            low = nclinical
+            up = 0
+            cate = []
+            count = 0
+            while up < X_train.shape[1]:
+                up = np.min([low + cevaeMax, X_train.shape[1]])
+                print('Partition', count, 'low  - up', low, up, ' Progress:', up*100/X_train_cevae_s.shape[1])
+                count += 1
+                X_train_cevae, X_test_cevae = X_train_cevae_s.copy(), X_test_cevae_s.copy()
+                X_train_cevae, X_test_cevae = X_train_cevae[:, low:up], X_test_cevae[:, low:up]
+                treatments = range(len(colnamesZ), len(colnamesZ)+up-low)
+                X_train_cevae = np.concatenate([X_train_cevae_c, X_train_cevae], 1)
+                X_test_cevae = np.concatenate([X_test_cevae_c, X_test_cevae], 1)
+                model_cevae = cevae(X_train_cevae, X_test_cevae, y_train, y_test, treatments, binfeats=treatments,
+                                    contfeats=range(len(colnamesZ)))
+                out = model_cevae.fit_all()
+                cate.append(out)
+                low = up
+                np.save('cevae_cate_checkpoints', cate)
+            cate = [item for sublist in cate for item in sublist]
+        else:
+            treatments = range(len(colnamesZ), X_train.shape[1])
+            model_cevae = cevae(X_train, X_test, y_train, y_test, treatments,
+                                binfeats=treatments, contfeats=colnamesZ)
+            cate = model_cevae.fit_all()
+        coef_table['CEVAE'] = cate
+        np.save('level1data_learnersout_cevae', coef_table)
+        print('Done!')
     if 'noise' in LearnersList:
         print('\n\nAdding noise')
         coef_table['noise'] = np.random.normal(0, 1, len(colnamesX))
         print(coef_table.head())
+        #np.save('level1data_learnersout', coef_table)
+    np.save('level1data_learnersout', coef_table)
     return coef_table
 
 
@@ -469,7 +509,6 @@ class learner_BART():
         assert isinstance(model, object)
         self.model = model
 
-
     def cate(self, TreatmentColumns, boostrap=False, b=30):
         print('CATE In progress')
         if len(TreatmentColumns) > 50:
@@ -500,7 +539,7 @@ class learner_BART():
 
     def boostrap_cate(self, dif, b=30):
         # TODO: implemente bootstrap cate
-        print(  b)
+        print(b)
 
 
 class learner_deconfounder_algorithm():

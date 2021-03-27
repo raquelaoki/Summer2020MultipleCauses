@@ -38,8 +38,9 @@ class Data(object):
         self.y_test = y_test
         self.binfeats = range(
             self.X_train.shape[1] - 1) if binfeats is None else binfeats  # which features are continuous
-        # print('From data initialization', self.binfeats)
-        self.contfeats = [] if contfeats is None else contfeats  # which features are continuous
+        # print('From data initialization', len(self.binfeats))
+        self.contfeats = [] if contfeats is None else list(contfeats)  # which features are continuous
+        # print('continuous', list(contfeats))
         # TODO: update continuous features for goPDX
 
     def get_train_valid_test(self):
@@ -133,14 +134,14 @@ class p_t_z(nn.Module):
         self.dim_out = dim_out
 
         # dim_in is dim of latent space z
-        #print('Chekcin:', dim_in)
+        # print('Chekcin:', dim_in)
         self.input = nn.Linear(dim_in, dim_h)
         # loop through dimensions to create fully con. hidden layers, add params with ModuleList
         self.hidden = nn.ModuleList([nn.Linear(dim_h, dim_h) for _ in range(nh)])
         self.output = nn.Linear(dim_h, dim_out)
 
     def forward(self, x):
-        #print('Checking:',x.shape)
+        # print('Checking:',x.shape)
         x = F.elu(self.input(x))
         for i in range(self.nh):
             x = F.elu(self.hidden[i](x))
@@ -196,7 +197,7 @@ class q_t_x(nn.Module):
         # save required vars
         self.nh = nh
         self.dim_out = dim_out
-        #print('dim_in', dim_in)
+        # print('dim_in', dim_in)
         # dim_in is dim of data x
         self.input = nn.Linear(dim_in, dim_h)
         # loop through dimensions to create fully con. hidden layers, add params with ModuleList
@@ -204,7 +205,7 @@ class q_t_x(nn.Module):
         self.output = nn.Linear(dim_h, dim_out)
 
     def forward(self, x):
-        #print('cehcking:', x.shape)
+        # print('cehcking:', x.shape)
         x = F.elu(self.input(x))
         for i in range(self.nh):
             x = F.elu(self.hidden[i](x))
@@ -254,7 +255,7 @@ class q_z_tyx(nn.Module):
         self.nh = nh
 
         # Shared layers with separated output layers
-        #print('CHecking:', dim_in)
+        # print('CHecking input:', dim_in)
         self.input = nn.Linear(dim_in, dim_h)
         # loop through dimensions to create fully con. hidden layers, add params with ModuleList
         self.hidden = nn.ModuleList([nn.Linear(dim_h, dim_h) for _ in range(nh)])
@@ -267,7 +268,7 @@ class q_z_tyx(nn.Module):
 
     def forward(self, xy, t):
         # Shared layers with separated output layers
-        #print('Checking2:',xy.shape)
+        # print('Checking:', xy.shape)
         x = F.elu(self.input(xy))
         for i in range(self.nh):
             x = F.elu(self.hidden[i](x))
@@ -289,11 +290,12 @@ class q_z_tyx(nn.Module):
 class CEVAE():
     def __init__(self, X_train, X_test, y_train, y_test,
                  treatments_columns, z_dim=20,
-                 h_dim=64, epochs=100, batch=20, lr=0.001,
-                 decay=0.001, print_every=25,
+                 h_dim=64, epochs=25, batch=20, lr=0.001,
+                 decay=0.001, print_every=50,
                  binfeats=None, contfeats=None):
         super(CEVAE, self).__init__()
         self.treatments_columns = treatments_columns
+        # print('From cevae ini', len(binfeats))
         self.dataset = Data(X_train, X_test, y_train, y_test, treatments_columns, batch, binfeats, contfeats)
         self.z_dim = z_dim
         self.h_dim = h_dim
@@ -326,22 +328,25 @@ class CEVAE():
     def fit_all(self):
         cevae_cate = np.zeros(len(self.treatments_columns))
         f1, fpr, tpr, auc = [], [], [], []
+        except_error = 0
         for i, (train_loader, test_loader, contfeats, binfeats) in enumerate(self.dataset.get_train_valid_test()):
             # train contains: X, t, y
-            print('Treatment:', i)
-            y0, y1, cevae_cate[i], y_test_pred, y_test = self.fit(train_loader, test_loader)
-            # print(y_test_pred, y_test )
-            thhold = self.Find_Optimal_Cutoff(y_test, y_test_pred)
-            y_test_pred01 = [0 if item < thhold else 1 for item in y_test_pred]
-            # vprint('y0 and y1',y0, y1,' predictions', y_test_pred[0:10], 'real value', y_test)
-            f1.append(f1_score(y_test, y_test_pred01))
-            fpri, tpri, _ = roc_curve(y_test, y_test_pred)
-            auc.append(roc_auc_score(y_test, y_test_pred01))
-            fpr.append(fpri)
-            tpr.append(tpri)
+            try:
+                y0, y1, cevae_cate[i], y_test_pred, y_test = self.fit(train_loader, test_loader)
+                # print(y_test_pred, y_test )
+                thhold = self.Find_Optimal_Cutoff(y_test, y_test_pred)
+                y_test_pred01 = [0 if item < thhold else 1 for item in y_test_pred]
+                # vprint('y0 and y1',y0, y1,' predictions', y_test_pred[0:10], 'real value', y_test)
+                f1.append(f1_score(y_test, y_test_pred01))
+                fpri, tpri, _ = roc_curve(y_test, y_test_pred)
+                auc.append(roc_auc_score(y_test, y_test_pred01))
+                fpr.append(fpri)
+                tpr.append(tpri)
+            except ValueError:
+                cevae_cate[i] = np.nan
+                except_error += 1
 
-        print('... Evaluation (average):')
-        print('... Testing set: F1 - ', np.mean(f1))
+        print('... Evaluation (average ', len(f1), ' treatments): F1 =', np.mean(f1), ' Errors:',except_error)
         # roc = {'learners': 'CEVAE',
         #       'fpr': np.mean(fpr),
         #       'tpr': np.mean(tpr),
@@ -358,11 +363,11 @@ class CEVAE():
                            dim_out_con=len(self.dataset.contfeats)).cuda()
         p_t_z_dist = p_t_z(dim_in=self.z_dim, nh=1, dim_h=self.h_dim, dim_out=1).cuda()
         p_y_zt_dist = p_y_zt(dim_in=self.z_dim, nh=3, dim_h=self.h_dim, dim_out=1).cuda()
-        q_t_x_dist = q_t_x(dim_in=x_dim-1, nh=1, dim_h=self.h_dim, dim_out=1).cuda()
+        q_t_x_dist = q_t_x(dim_in=x_dim - 1, nh=1, dim_h=self.h_dim, dim_out=1).cuda()
         # t is not feed into network, therefore not increasing input size (y is fed).
-        q_y_xt_dist = q_y_xt(dim_in=x_dim-1, nh=3, dim_h=self.h_dim, dim_out=1).cuda()
-        # print('MY DIMENSION IS',len(self.dataset.binfeats) + len(self.dataset.contfeats) )
-        q_z_tyx_dist = q_z_tyx(dim_in=len(self.dataset.binfeats) + len(self.dataset.contfeats) , nh=3,
+        q_y_xt_dist = q_y_xt(dim_in=x_dim - 1, nh=3, dim_h=self.h_dim, dim_out=1).cuda()
+        # print('MY DIMENSION IS',len(self.dataset.binfeats) , len(self.dataset.contfeats) )
+        q_z_tyx_dist = q_z_tyx(dim_in=len(self.dataset.binfeats) + len(self.dataset.contfeats), nh=3,
                                dim_h=self.h_dim,
                                dim_out=self.z_dim).cuda()  # remove an 1 from dim_in
         p_z_dist = normal.Normal(torch.zeros(self.z_dim).cuda(), torch.ones(self.z_dim).cuda())
@@ -382,10 +387,10 @@ class CEVAE():
                 for j in range(len(batch)):
                     batch[j] = batch[j].cuda()
                 xy = torch.cat((batch[0], batch[2]), 1)
+
                 z_infer = q_z_tyx_dist(xy=xy, t=batch[1])
                 # use a single sample to approximate expectation in lowerbound
                 z_infer_sample = z_infer.sample()
-
                 # RECONSTRUCTION LOSS
                 # p(x|z)
                 x_bin, x_con = p_x_z_dist(z_infer_sample)
@@ -403,7 +408,6 @@ class CEVAE():
                 y = p_y_zt_dist(z_infer_sample, batch[1])
                 l4 = y.log_prob(batch[2]).squeeze()
                 loss['Reconstr_y'].append(l4.sum().cpu().detach().float())
-
                 # REGULARIZATION LOSS
                 # p(z) - q(z|x,t,y)
                 # approximate KL
@@ -434,9 +438,9 @@ class CEVAE():
                 # Update step
                 optimizer.step()
 
-            if epoch % self.print_every == 0:
-                print('Epoch - ', epoch, ' Loss: ', loss_mean)
-                # TODO: add eval for validation and training set?
+            # if epoch % self.print_every == 0:
+            #    print('Epoch - ', epoch, ' Loss: ', loss_mean)
+            #    # TODO: add eval for validation and training set?
         # Done Training!
         batch = next(iter(test_loader))
         y0, y1 = get_y0_y1(p_y_zt_dist, q_y_xt_dist, q_z_tyx_dist, batch[0].cuda(), batch[1].cuda())
