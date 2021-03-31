@@ -65,6 +65,7 @@ def learners(LearnersList, X, y, colnamesX, id='', Z=None, colnamesZ=None, path_
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
     coef_table = pd.DataFrame(columns=['causes'])
     coef_table['causes'] = colnamesX
+    print("X_trian shape should ne 16236 -", X_train.shape)
 
     if 'DA' in LearnersList:
         print('\n\nLearner: DA')
@@ -96,32 +97,40 @@ def learners(LearnersList, X, y, colnamesX, id='', Z=None, colnamesZ=None, path_
     if 'CEVAE' in LearnersList:
         print('\n\n Learner: CEVAE')
         nclinical = len(colnamesZ)
-        if cevaeMax < len(range(nclinical, X_train.shape[0])):
+        if cevaeMax < len(range(nclinical, X_train.shape[1])):
             print('... Working with dataset partitions')
             X_train_cevae_c, X_test_cevae_c = X_train[:, 0:nclinical], X_test[:, 0:nclinical]
             X_train_cevae_s = X_train[:, nclinical:X_train.shape[1]]
             X_test_cevae_s = X_test[:, nclinical:X_train.shape[1]]
             low = nclinical
             up = 0
-            cate = []
+            cate = []meta_learner
             count = 0
-            while up < X_train.shape[1]:
-                up = np.min([low + cevaeMax, X_train.shape[1]])
+            while up < X_train_cevae_s.shape[1]:
+                up = np.min([low + cevaeMax, X_train_cevae_s.shape[1]])
                 print('Partition', count, 'low  - up', low, up, ' Progress:', up*100/X_train_cevae_s.shape[1])
                 count += 1
-                X_train_cevae, X_test_cevae = X_train_cevae_s.copy(), X_test_cevae_s.copy()
-                X_train_cevae, X_test_cevae = X_train_cevae[:, low:up], X_test_cevae[:, low:up]
-                treatments = range(len(colnamesZ), len(colnamesZ)+up-low)
-                X_train_cevae = np.concatenate([X_train_cevae_c, X_train_cevae], 1)
-                X_test_cevae = np.concatenate([X_test_cevae_c, X_test_cevae], 1)
-                model_cevae = cevae(X_train_cevae, X_test_cevae, y_train, y_test, treatments, binfeats=treatments,
-                                    contfeats=range(len(colnamesZ)))
-                out = model_cevae.fit_all()
-                cate.append(out)
-                low = up
-                np.save('cevae_cate_checkpoints', cate)
+                if count == 1:
+                    low = 0
+                    up = nclinical
+                    print('Partition', count, 'low  - up', low, up)
+                    X_train_cevae, X_test_cevae = X_train_cevae_s.copy(), X_test_cevae_s.copy()
+                    X_train_cevae, X_test_cevae = X_train_cevae[:, low:up], X_test_cevae[:, low:up]
+                    treatments = range(len(colnamesZ), len(colnamesZ) + up - low)
+                    X_train_cevae = np.concatenate([X_train_cevae_c, X_train_cevae], 1)
+                    X_test_cevae = np.concatenate([X_test_cevae_c, X_test_cevae], 1)
+                    model_cevae = cevae(X_train_cevae, X_test_cevae, y_train, y_test, treatments, binfeats=treatments,
+                                        contfeats=range(len(colnamesZ)))
+                    out = model_cevae.fit_all()
+                    cate.append(out)
+                    low = up
+                    np.save('cevae_cate_checkpoints_z', cate)
+                    print('SAVED!')
+                else:
+                    low = up
             cate = [item for sublist in cate for item in sublist]
         else:
+            print('Not using Partitions', cevaeMax, len(range(nclinical, X_train.shape[0])))
             treatments = range(len(colnamesZ), X_train.shape[1])
             model_cevae = cevae(X_train, X_test, y_train, y_test, treatments,
                                 binfeats=treatments, contfeats=colnamesZ)

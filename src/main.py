@@ -14,7 +14,8 @@ from sklearn import preprocessing
 import sys
 import train as parkca
 import eval as evaluation
-
+sys.path.insert(0,'CompBioAndSimulated_Datasets/')
+from fromBEDtoNPY import goPDX
 data_preprocessing = False
 run_learners = True
 
@@ -32,21 +33,12 @@ def main(config_path, DataPreprocessing=False, RunLearners=True):
     # 318 (318, 42) (318, 16641) 16641
     if DataPreprocessing:
         print('Option 1: Starting pre-processing:')
-        import data_preprossing_functions as dpf
-        y, x_clinical, x_snps, x_colnames, x_clinical_names = dpf.run_preprocessing(path, True)
-        x_clinical = x_clinical.astype('float64')
+        data = goPDX(final=False)
         print('Done!')
-        print('Shapes:', len(y), sum(y), x_clinical.shape, x_snps.shape, len(x_colnames), len(x_clinical_names))
     else:
         print('Option 2: Reading files')
-        y = np.load('y.npy')
-        x_clinical = np.load('x_clinical.npy', allow_pickle=True)
-        x_clinical = x_clinical.astype('float64')
-        x_clinical_names = np.load('x_clinical_names.npy', allow_pickle=True)
-        x_snps = np.load('x_snps.npy', allow_pickle=True)
-        x_colnames = np.load('x_colnames.npy', allow_pickle=True)
+        data = goPDX()
         print('Done!')
-        print('Shapes:', len(y), sum(y), x_clinical.shape, x_snps.shape, len(x_colnames), len(x_clinical_names))
 
     """ Parkca: Learners """
     if RunLearners:
@@ -59,24 +51,23 @@ def main(config_path, DataPreprocessing=False, RunLearners=True):
                 print('BART Library Missing')
                 print("Check: https://github.com/JakeColtman/bartpy")
                 sys.exit()
-        X = np.concatenate([x_clinical, x_snps], axis=1)
+        X = np.concatenate([data.x_clinical, data.x_snps], axis=1)
         print(X.shape)
 
         X = preprocessing.MinMaxScaler().fit_transform(X)
-        level1data = parkca.learners([params['learners']], X, y, x_colnames, x_clinical_names)
+        level1data = parkca.learners([params['learners']], X, data.y, data.x_snps_names, data.x_clinical_names)
         print(level1data.head())
         np.save('level1data', level1data)
         print('Learners: Done!')
     else:
-
         print('Loading option not implemented for this option')
         sys.exit()
 
     """ Parkca: Meta-learners"""
     # TODO: add meta-learner
-    ks = pd.read_csv(path + 'known_snps_fullname.txt', header=None)[0].values
+    # ks = pd.read_csv(path + 'known_snps_fullname.txt', header=None)[0].values
     level1data['y'] = 0
-    level1data['y'] = [1 if i in ks else 0 for i in level1data['causes'].values]
+    level1data['y'] = [1 if i in data.known_snps else 0 for i in level1data['causes'].values]
 
     # Checking the Diversity
     diversity_mean, _ = evaluation.diversity(params['learners'], level1data, 'y')
@@ -84,6 +75,7 @@ def main(config_path, DataPreprocessing=False, RunLearners=True):
 
     level1data.set_index('causes', inplace=True, drop=True)
     level1data = parkca.data_norm(level1data)
+    level1data.fillna(0)
     roc, MetalearnerOutput, y_full_prob = parkca.meta_learner(level1data, params['metalearners'], 'y')
 
     # Random Forest (RF) had the best results on tests
