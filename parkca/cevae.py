@@ -304,6 +304,7 @@ class CEVAE():
         self.lr = lr
         self.decay = decay
         self.print_every = print_every
+        self.print_every = print_every
         self.scaler = MinMaxScaler(feature_range=(0, 1))
 
     def Find_Optimal_Cutoff(self, target, predicted):
