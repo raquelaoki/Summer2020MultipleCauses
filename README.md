@@ -1,5 +1,6 @@
-# Summer2020MultipleCauses
-BCCH project 
+# BCCH project 
+
+Author: Raquel Aoki
 
 This project was tested on [Google Colab](https://github.com/raquelaoki/Summer2020MultipleCauses/blob/master/src/experiments.ipynb).
 
